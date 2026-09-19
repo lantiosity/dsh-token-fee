@@ -230,7 +230,8 @@ const t = (key, params) => {
     'editor.customSplit': '自定义 · 区分峰谷',
     'editor.edit': '编辑',
     'editor.invalidPriceShort': '—',
-    'editor.invalidPrice': '{label} 的「{bucket}」不是有效的非负数字：{value}',
+    'editor.invalidPriceHint': '不是有效的非负数字，保存时会按 0 处理',
+    'editor.savedWithCorrections': '已保存。以下输入不是有效的非负数字，已按 0 保存：{fields}',
     'editor.dirtyHint': '修改后请点「保存」写入文件。',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
   }
@@ -569,14 +570,27 @@ test('价格输入原样保留小数点等中间态', () => {
 })
 
 test('保存时把价格草稿转成数字', () => {
-  const block = clientExports.toPriceBlock({ input: '1.', cacheRead: '.5', cacheWrite: '', output: '0.04' }, 'p / m', t)
-  assert.deepEqual(block, { input: 1, cacheRead: 0.5, cacheWrite: 0, output: 0.04 })
+  const block = clientExports.toPriceBlock({ input: '1.', cacheRead: '.5', cacheWrite: '', output: '0.04' })
+  assert.deepEqual(block.prices, { input: 1, cacheRead: 0.5, cacheWrite: 0, output: 0.04 })
+  assert.deepEqual(block.corrected, [])
 })
 
-test('非法价格在保存时被拒绝', () => {
-  assert.throws(() => clientExports.toPriceBlock({ input: 'abc', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /abc/)
-  assert.throws(() => clientExports.toPriceBlock({ input: '-1', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /-1/)
-  assert.throws(() => clientExports.toPriceBlock({ input: '1e', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /1e/)
+test('非法价格就地归零并报告，而不是让保存失败', () => {
+  // 一个笔误不该阻塞整次保存、连带其它条目一起丢掉。
+  const block = clientExports.toPriceBlock({
+    input: '0s',
+    cacheRead: '-1',
+    cacheWrite: '',
+    output: '6',
+  })
+  assert.deepEqual(block.prices, { input: 0, cacheRead: 0, cacheWrite: 0, output: 6 })
+  assert.deepEqual(block.corrected, ['input', 'cacheRead'])
+})
+
+test('空白价格按 0 处理且不算修正', () => {
+  const block = clientExports.toPriceBlock({ input: '  ', cacheRead: 0, cacheWrite: 0, output: 0 })
+  assert.deepEqual(block.prices, { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 })
+  assert.deepEqual(block.corrected, [])
 })
 
 test('provider 与 model 使用可输入的组合框，而不是原生 datalist', () => {
