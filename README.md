@@ -42,7 +42,6 @@ node scripts/install.mjs --check    # 校验既有安装
 
 两条路径只需其一。安装后**重启 `dsh web`，再硬刷新浏览器**。
 
-
 ## 使用
 
 - **费用胶囊**：位于输入框下方，与内置的「轮次 / 速度」和「token 用量」胶囊并排。默认显示 `¥0.12` 这样的金额；会话中还有未配置价格的模型时，会额外标注未定价数量。
@@ -143,8 +142,16 @@ node scripts/install.mjs --check    # 校验既有安装
 
 ```bash
 npm run check   # 语法检查
-npm test        # 纯函数测试（价目表校验、匹配优先级、峰谷判定、费用换算）
+npm test        # 三个测试套件
 ```
+
+| 套件 | 覆盖 |
+| --- | --- |
+| `scripts/test-pricing.mjs` | 价目表校验、匹配优先级、峰谷判定、费用换算 |
+| `scripts/test-host.mjs` | `apply` 的注册行为、投影折叠（含替换与重试）、价目表文件读写 |
+| `scripts/test-client.mjs` | 模块工厂装配、`apply` 的 slot 注册，以及用真实 React 渲染三个组件 |
+
+`test-client.mjs` 会从 `<DSH_HOME>/profiles/node_modules` 解析真实 React；找不到时退回替身并跳过渲染用例。
 
 代码结构：
 

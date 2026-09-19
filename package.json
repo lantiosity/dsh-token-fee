@@ -39,7 +39,7 @@
   ],
   "scripts": {
     "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs",
-    "test": "node scripts/test-pricing.mjs",
+    "test": "node scripts/test-pricing.mjs && node scripts/test-host.mjs && node scripts/test-client.mjs",
     "verify": "npm run check && npm test"
   },
   "license": "MIT",
