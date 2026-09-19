@@ -1,0 +1,5 @@
+# 以 profile bundle 方式注册本包时（dsh plugin --profile web add），
+# 该 patch 层会挂载 host 半。浏览器半由 package.json 的 dsh.client 声明。
+- insert:
+    - id: token-fee
+      name: "@lantiosity/dsh-token-fee"

@@ -1,0 +1,49 @@
+{
+  "name": "@lantiosity/dsh-token-fee",
+  "version": "0.1.0",
+  "description": "Real-time per-session token cost for the DeepSeek Harness web GUI, with per-provider pricing and configurable peak/off-peak tariffs",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "token-cost",
+    "pricing"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./pricing": "./lib/pricing.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
+    }
+  },
+  "files": [
+    "lib/",
+    "cordis.patch.yml",
+    "scripts/install.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs",
+    "test": "node scripts/test-pricing.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
