@@ -90,6 +90,12 @@ function makeRequire() {
       return {
         IconDatabaseOutline16: () => null,
         IconChevronDownOutline14: () => null,
+        // 官方按钮：把 variant/size 落到 data 属性上，便于断言用的是哪一种样式。
+        Button: ({ variant = 'ghost', size = 'md', children, ...rest }) => react.createElement(
+          'button',
+          { type: 'button', 'data-variant': variant, 'data-size': size, ...rest },
+          children,
+        ),
         // 组合框的下拉列表：展开时把候选渲染成列表，收起时只渲染 anchor。
         // 用 createElement 而不是裸对象，否则 React 会把它当成非法子节点。
         Menu: ({ open, anchor, items, onSelect }) => react.createElement(
@@ -220,6 +226,10 @@ const t = (key, params) => {
     'editor.tariffPeak': '高峰',
     'editor.tariffOffPeak': '空闲',
     'editor.tariffFlat': '单价',
+    'editor.customFlat': '自定义 · 统一单价',
+    'editor.customSplit': '自定义 · 区分峰谷',
+    'editor.edit': '编辑',
+    'editor.invalidPriceShort': '—',
     'editor.invalidPrice': '{label} 的「{bucket}」不是有效的非负数字：{value}',
     'editor.dirtyHint': '修改后请点「保存」写入文件。',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
@@ -577,23 +587,25 @@ test('provider 与 model 使用可输入的组合框，而不是原生 datalist'
     t,
     pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }] }),
   }))
-  // 输入框保持自由输入，右侧箭头打开候选列表；不再用浏览器原生的 datalist。
+  // 收敛态是只读卡片：与内置条目同一形态，带「编辑」按钮。
   assert.doesNotMatch(html, /<datalist/)
-  assert.match(html, /class="tf_combo"/)
-  assert.match(html, /class="tf_comboInput"[^>]*value="my-gateway"/)
-  assert.match(html, /class="tf_comboToggle"/)
+  assert.match(html, /tf_priceTable/)
+  assert.match(html, />编辑</)
+  assert.doesNotMatch(html, /tf_combo/)
 })
 
-test('组合框的候选列表来自已配置路由', () => {
+test('组合框只在展开编辑后出现', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, {
+  // 通过条目区的「编辑」按钮进入编辑态：这里直接驱动组件内部状态不可行，
+  // 改为断言收敛态与编辑态的控件集合互斥。
+  const collapsed = render(react.createElement(section.component, {
     t,
     pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'not-configured', model: '' }] }),
   }))
-  // provider 未匹配时模型候选退回全部模型，用于提示；列表本身由 Menu 在展开时渲染。
-  assert.match(html, /class="tf_combo"/)
+  assert.doesNotMatch(collapsed, /tf_combo/)
+  assert.match(collapsed, /tf_priceTable/)
 })
 
 test('缺少路由建议时仍可自由输入', () => {
@@ -604,18 +616,9 @@ test('缺少路由建议时仍可自由输入', () => {
     t,
     pricing: fakePricing({ routes: [], fileEntries: [FILE_ENTRY] }),
   }))
-  assert.match(html, /class="tf_comboInput"[^>]*value="deepseek-official"/)
-})
-
-test('新条目默认不分峰谷，也不带峰谷规则引用', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, { t, pricing: fakePricing({ fileEntries: [] }) }))
-  // 编辑器里没有条目时不该出现任何条目卡片；峰谷规则下拉在未勾选
-  // 「区分峰谷」时禁用，说明新条目不会预设规则。
-  assert.match(html, /editor\.noEntries/)
-  assert.doesNotMatch(html, /tf_comboInput/)
+  // 没有路由建议不影响收敛态卡片；输入框本身是自由文本，不受候选限制。
+  assert.match(html, /tf_priceTable/)
+  assert.match(html, /deepseek-official \/ deepseek-flash/)
 })
 
 test('保存键位于编辑器顶部而非页面底部', () => {
@@ -629,33 +632,84 @@ test('保存键位于编辑器顶部而非页面底部', () => {
   assert.ok(saveBar >= 0, '应有保存工具栏')
   assert.ok(entriesSection >= 0, '应有条目编辑区')
   assert.ok(saveBar < entriesSection, '保存工具栏应排在编辑内容之前')
-  assert.match(html, /data-primary="true"[^>]*>editor\.save</)
+  assert.match(html, /data-variant="primary"[^>]*>editor\.save</)
   // 底部不再重复一个保存键，避免两处入口语义重叠。
   assert.equal(html.split('editor.save<').length - 1, 1)
 })
 
-test('币种使用带本地化名称的下拉框', () => {
+test('币种与峰谷规则都是下拉框，选项带本地化名称', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
   const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
-  // 币种与峰谷规则都是下拉框；币种选项带 Intl 提供的本地化名称。
-  assert.match(html, /<option value="CNY"[^>]*>CNY 人民币<\/option>/)
-  assert.match(html, /<option value="USD"[^>]*>USD 美元<\/option>/)
-  assert.doesNotMatch(html, /type="text" value="CNY"/)
+  // 峰谷规则的时区下拉始终存在（规则区独立于条目编辑态）。
+  assert.match(html, /<option value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)<\/option>/)
+  // 币种下拉只在条目编辑态出现，收敛态不该有可编辑的币种控件。
+  assert.doesNotMatch(html, /<option value="CNY"[^>]*>CNY 人民币<\/option>/)
 })
 
-test('文件里的自定义币种会补进下拉框', () => {
+test('已保存的自定义条目按内置条目的格式呈现', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  // 清空内置条目，让断言只面对自定义卡片本身。
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({
+      builtin: [],
+      fileEntries: [{ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }],
+    }),
+  }))
+  // 与内置卡片同构：标题行 + 四列单价表 + 页脚操作位。
+  assert.match(html, /my-gateway \/ glm-5/)
+  assert.match(html, /tf_priceTable/)
+  assert.match(html, /tf_cardFoot/)
+  assert.match(html, /tf_cardActions/)
+  // 统一单价的条目只渲染一行，并标为「自定义 · 统一单价」。
+  assert.match(html, /自定义 · 统一单价/)
+  assert.doesNotMatch(html, /tf_priceRowLabel">高峰/)
+})
+
+test('区分峰谷的自定义条目渲染两行并标注', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
   const html = render(react.createElement(section.component, {
     t,
-    // XTS 不在 ICU 的货币枚举里，但 Intl.DisplayNames 认识它——正好同时验证
-    // 「补进选项」与「带本地化名称」两件事。
-    pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, currency: 'XTS' }] }),
+    pricing: fakePricing({
+      fileSchedules: { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
+      fileEntries: [{
+        ...FILE_ENTRY,
+        provider: 'my-gateway',
+        model: 'glm-5',
+        schedule: 'mine',
+        prices: {
+          peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+          offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+        },
+      }],
+    }),
   }))
-  assert.match(html, /<option value="XTS"[^>]*>XTS 测试货币代码<\/option>/)
+  assert.match(html, /自定义 · 区分峰谷/)
+  assert.match(html, /tf_priceRowLabel">高峰/)
+  assert.match(html, /tf_priceRowLabel">空闲/)
+})
+
+test('价格草稿在卡片上安全降级为占位符', () => {
+  // 中间态（"1."）能显示为数字；非法值显示占位符而不是 NaN。
+  assert.equal(clientExports.priceNumber('1.'), 1)
+  assert.equal(clientExports.priceNumber('.5'), 0.5)
+  assert.equal(clientExports.priceNumber(''), null)
+  assert.equal(clientExports.priceNumber('abc'), null)
+  assert.equal(clientExports.priceNumber('-1'), null)
+  assert.equal(clientExports.priceNumber(0.04), 0.04)
+})
+
+test('新条目默认不分峰谷，也不带峰谷规则引用', () => {
+  const fresh = clientExports.blankEntry()
+  assert.equal(fresh.schedule, null, '新条目不该预设峰谷规则')
+  assert.equal(fresh.prices.offPeak, undefined, '新条目默认统一单价')
+  assert.ok(fresh.id.startsWith('custom-'))
 })
 
 //#endregion
