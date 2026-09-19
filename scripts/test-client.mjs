@@ -123,25 +123,48 @@ const FLAT_BUILTIN = {
   prices: { peak: { input: 3, cacheRead: 0.1, cacheWrite: 0, output: 9 } },
 }
 
-/** 价目表句柄替身：只提供组件读取所需的最小面。 */
+/** 用户文件里的默认条目替身（有效表与编辑器草稿共用）。 */
+const FILE_ENTRY = {
+  id: 'mine',
+  provider: 'deepseek-official',
+  model: 'deepseek-flash',
+  currency: 'CNY',
+  schedule: null,
+  prices: { peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 } },
+}
+
+/**
+ * 价目表句柄替身。
+ * @param options.entries - 有效价目表（`data.entries`），供费用换算使用。
+ * @param options.fileEntries - 用户文件条目（`data.file.entries`），编辑器草稿的来源。
+ * @param options.routes - 已配置路由，供 provider / model 建议使用。
+ */
 function fakePricing(options = {}) {
+  const fileEntries = options.fileEntries ?? [FILE_ENTRY]
   const snapshot = {
     status: 'ready',
     error: options.error ?? null,
     data: {
       displayCurrency: 'CNY',
-      entries: options.entries ?? [{
-        id: 'mine',
-        provider: 'deepseek-official',
-        model: 'deepseek-flash',
-        currency: 'CNY',
-        schedule: null,
-        prices: { peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 } },
-      }],
+      entries: options.entries ?? fileEntries,
       builtin: options.builtin ?? [SPLIT_BUILTIN],
       schedules: {},
       builtinSchedules: { deepseek: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] } },
-      file: { path: '/tmp/token-fee.json', exists: false, entries: [], schedules: null, error: null },
+      routes: options.routes ?? [
+        {
+          id: 'deepseek-official',
+          name: 'DeepSeek',
+          models: [{ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }, { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' }],
+        },
+        { id: 'my-gateway', name: 'My Gateway', models: [{ id: 'glm-5', name: 'GLM-5' }] },
+      ],
+      file: {
+        path: '/tmp/token-fee.json',
+        exists: options.fileEntries !== undefined,
+        entries: options.fileEntries ?? [],
+        schedules: options.fileSchedules ?? null,
+        error: null,
+      },
       configEntryCount: 0,
     },
   }
@@ -176,6 +199,7 @@ const t = (key, params) => {
     'editor.tariffPeak': '高峰',
     'editor.tariffOffPeak': '空闲',
     'editor.tariffFlat': '单价',
+    'editor.invalidPrice': '{label} 的「{bucket}」不是有效的非负数字：{value}',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
   }
   const template = dictionary[key] ?? key
@@ -477,6 +501,66 @@ test('未定价提示带有可用的「去配置价格」按钮', () => {
     pricing: fakePricing(),
   }))
   assert.match(html, /未配置价格/)
+})
+
+test('价格输入原样保留小数点等中间态', () => {
+  const prices = { peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 } }
+  // 关键：草稿必须是字符串 "1."，否则输入框回显 "1"，小数点被吞掉。
+  const first = clientExports.applyPriceDraft(prices, 'peak', 'input', '1.')
+  assert.equal(first.peak.input, '1.')
+  const second = clientExports.applyPriceDraft(first, 'peak', 'input', '1.5')
+  assert.equal(second.peak.input, '1.5')
+  assert.equal(second.peak.cacheRead, 0.04, '未触碰的桶保持原值')
+  assert.equal(prices.peak.input, 2, '不得就地修改传入的草稿')
+})
+
+test('保存时把价格草稿转成数字', () => {
+  const block = clientExports.toPriceBlock({ input: '1.', cacheRead: '.5', cacheWrite: '', output: '0.04' }, 'p / m', t)
+  assert.deepEqual(block, { input: 1, cacheRead: 0.5, cacheWrite: 0, output: 0.04 })
+})
+
+test('非法价格在保存时被拒绝', () => {
+  assert.throws(() => clientExports.toPriceBlock({ input: 'abc', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /abc/)
+  assert.throws(() => clientExports.toPriceBlock({ input: '-1', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /-1/)
+  assert.throws(() => clientExports.toPriceBlock({ input: '1e', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /1e/)
+})
+
+test('provider 与 model 输入带已配置模型的建议列表', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }] }),
+  }))
+  // provider 建议列出全部已配置路由；输入本身不受限（datalist 而非 select）。
+  assert.match(html, /<datalist id="[^"]*"><option value="deepseek-official"><\/option><option value="my-gateway"><\/option><\/datalist>/)
+  assert.match(html, /<input(?=[^>]*\bvalue="my-gateway")(?=[^>]*\blist=")[^>]*>/)
+  // 模型建议按条目已选的 provider 收窄。
+  assert.match(html, /<datalist id="[^"]*"><option value="glm-5"><\/option><\/datalist>/)
+})
+
+test('provider 未匹配时模型建议退回全部模型', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'not-configured', model: '' }] }),
+  }))
+  assert.match(html, /<datalist id="[^"]*"><option value="deepseek-flash"><\/option><option value="deepseek-v4-pro"><\/option><option value="glm-5"><\/option><\/datalist>/)
+})
+
+test('缺少路由建议时退化为纯输入', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({ routes: [], fileEntries: [FILE_ENTRY] }),
+  }))
+  assert.match(html, /<input(?=[^>]*\bvalue="deepseek-official")(?=[^>]*\blist=")[^>]*>/)
+  assert.match(html, /<datalist id="[^"]*"><\/datalist>/)
 })
 
 //#endregion

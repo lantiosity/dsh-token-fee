@@ -25,12 +25,19 @@ async function test(label, body) {
 }
 
 /** 构造一个捕获注册行为的 host 上下文替身。 */
-function fakeContext(services = ['sessionProjections', 'webServer']) {
+/**
+ * 构造一个捕获注册行为的 host 上下文替身。
+ * @param services - 视为已注入的服务名。
+ * @param available - `ctx.get(name)` 能读到的可选服务。
+ */
+function fakeContext(services = ['sessionProjections', 'webServer'], available = {}) {
   const captured = { projections: [], routes: [], effects: 0 }
   const context = {
+    get: name => available[name],
     inject(deps, callback) {
       if (!deps.some(dep => services.includes(dep))) return
       callback({
+        get: name => available[name],
         effect(factory) {
           captured.effects += 1
           const disposer = factory()
@@ -52,6 +59,38 @@ function fakeContext(services = ['sessionProjections', 'webServer']) {
     },
   }
   return { context, captured }
+}
+
+/** 构造一个 GET 请求替身。 */
+function getRequest() {
+  return {
+    method: 'GET',
+    headers: { host: '127.0.0.1:3080' },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() {},
+  }
+}
+
+/** 构造一个记录状态与响应体的响应替身。 */
+function captureResponse() {
+  return {
+    status: 0,
+    payload: null,
+    writeHead(status) {
+      this.status = status
+    },
+    end(text) {
+      this.payload = JSON.parse(text)
+    },
+  }
+}
+
+/** 等待一个 handler 写完响应。 */
+async function settle(response) {
+  await new Promise((resolve) => {
+    const check = () => (response.payload === null ? setTimeout(check, 5) : resolve())
+    check()
+  })
 }
 
 /** 构造一条 `assistant/message` 事件。 */
@@ -392,6 +431,53 @@ await test('reset 清空用户层，回到内置条目', async () => {
   assert.equal(after.file.exists, false)
   assert.equal(after.file.entries.length, 0)
   await assert.rejects(readFile(file, 'utf8'), { code: 'ENOENT' })
+})
+
+await test('GET 端点返回已配置的 provider 与模型建议', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const llm = {
+    listProviders: () => [
+      { id: 'deepseek-official', name: 'DeepSeek' },
+      { id: 'my-gateway', name: 'My Gateway' },
+      { id: 'broken', name: 'Broken' },
+    ],
+    listModels: async (provider) => {
+      if (provider === 'broken') throw new Error('NO_ADAPTER')
+      return provider === 'deepseek-official'
+        ? [{ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }]
+        : [{ id: 'glm-5', name: 'GLM-5' }]
+    },
+  }
+  const { context, captured } = fakeContext(undefined, { llm })
+  apply(context, { pricingFile: join(dir, 'token-fee.json') })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = captureResponse()
+  route.handler(getRequest(), response)
+  await settle(response)
+  assert.equal(response.status, 200)
+  assert.deepEqual(response.payload.routes, [
+    { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }] },
+    { id: 'my-gateway', name: 'My Gateway', models: [{ id: 'glm-5', name: 'GLM-5' }] },
+    { id: 'broken', name: 'Broken', models: [] },
+  ])
+})
+
+await test('缺少 llm 服务时路由建议为空而不是请求失败', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: join(dir, 'token-fee.json') })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = captureResponse()
+  route.handler(getRequest(), response)
+  await settle(response)
+  assert.equal(response.status, 200)
+  assert.deepEqual(response.payload.routes, [])
 })
 
 //#endregion
