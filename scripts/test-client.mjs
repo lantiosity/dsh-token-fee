@@ -87,7 +87,28 @@ function makeRequire() {
     if (id === 'react/jsx-runtime') return hasRealReact ? jsxRuntime : stubJsxRuntime
     if (id === 'react-dom') return { createPortal: node => node }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
-      return { IconDatabaseOutline16: () => null }
+      return {
+        IconDatabaseOutline16: () => null,
+        IconChevronDownOutline14: () => null,
+        // 组合框的下拉列表：展开时把候选渲染成列表，收起时只渲染 anchor。
+        // 用 createElement 而不是裸对象，否则 React 会把它当成非法子节点。
+        Menu: ({ open, anchor, items, onSelect }) => react.createElement(
+          'span',
+          null,
+          anchor,
+          open
+            ? react.createElement(
+              'ul',
+              { className: 'tf_menuListStub' },
+              items.map(item => react.createElement(
+                'li',
+                { key: item.id, 'data-id': item.id, onClick: () => onSelect(item.id) },
+                item.type === 'label' ? item.text : item.id,
+              )),
+            )
+            : null,
+        ),
+      }
     }
     throw new Error(`未预期的模块请求：${id}`)
   }
@@ -161,7 +182,7 @@ function fakePricing(options = {}) {
       file: {
         path: '/tmp/token-fee.json',
         exists: options.fileEntries !== undefined,
-        entries: options.fileEntries ?? [],
+        entries: fileEntries,
         schedules: options.fileSchedules ?? null,
         error: null,
       },
@@ -200,6 +221,7 @@ const t = (key, params) => {
     'editor.tariffOffPeak': '空闲',
     'editor.tariffFlat': '单价',
     'editor.invalidPrice': '{label} 的「{bucket}」不是有效的非负数字：{value}',
+    'editor.dirtyHint': '修改后请点「保存」写入文件。',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
   }
   const template = dictionary[key] ?? key
@@ -351,12 +373,31 @@ test('内联调度被采纳为可编辑的命名规则', () => {
       model: 'glm-5',
       currency: 'CNY',
       schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] },
-      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+      prices: {
+        peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+        offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 0.5 },
+      },
     },
   ], null)
   assert.equal(adopted.entries.length, 1)
   assert.equal(adopted.entries[0].schedule, 'inline-1')
   assert.equal(adopted.schedules['inline-1'].timezone, 'UTC')
+})
+
+test('没有空闲价的条目不会被塞进内联规则', () => {
+  const adopted = clientExports.adoptPricing([
+    {
+      id: 'flat',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] },
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    },
+  ], null)
+  // 单一单价的条目用不到峰谷判定，不该凭空多出一条 inline-1 规则。
+  assert.equal(adopted.entries[0].schedule, null)
+  assert.deepEqual(adopted.schedules, {})
 })
 
 test('命名引用与无调度条目原样保留', () => {
@@ -376,7 +417,10 @@ test('采纳不会改写原始条目对象', () => {
     model: 'y',
     currency: 'CNY',
     schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] },
-    prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    prices: {
+      peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+      offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 0.5 },
+    },
   }
   const adopted = clientExports.adoptPricing([source], null)
   assert.equal(typeof source.schedule, 'object')
@@ -525,7 +569,7 @@ test('非法价格在保存时被拒绝', () => {
   assert.throws(() => clientExports.toPriceBlock({ input: '1e', cacheRead: 0, cacheWrite: 0, output: 0 }, 'p / m', t), /1e/)
 })
 
-test('provider 与 model 输入带已配置模型的建议列表', () => {
+test('provider 与 model 使用可输入的组合框，而不是原生 datalist', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
@@ -533,14 +577,14 @@ test('provider 与 model 输入带已配置模型的建议列表', () => {
     t,
     pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }] }),
   }))
-  // provider 建议列出全部已配置路由；输入本身不受限（datalist 而非 select）。
-  assert.match(html, /<datalist id="[^"]*"><option value="deepseek-official"><\/option><option value="my-gateway"><\/option><\/datalist>/)
-  assert.match(html, /<input(?=[^>]*\bvalue="my-gateway")(?=[^>]*\blist=")[^>]*>/)
-  // 模型建议按条目已选的 provider 收窄。
-  assert.match(html, /<datalist id="[^"]*"><option value="glm-5"><\/option><\/datalist>/)
+  // 输入框保持自由输入，右侧箭头打开候选列表；不再用浏览器原生的 datalist。
+  assert.doesNotMatch(html, /<datalist/)
+  assert.match(html, /class="tf_combo"/)
+  assert.match(html, /class="tf_comboInput"[^>]*value="my-gateway"/)
+  assert.match(html, /class="tf_comboToggle"/)
 })
 
-test('provider 未匹配时模型建议退回全部模型', () => {
+test('组合框的候选列表来自已配置路由', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
@@ -548,10 +592,11 @@ test('provider 未匹配时模型建议退回全部模型', () => {
     t,
     pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'not-configured', model: '' }] }),
   }))
-  assert.match(html, /<datalist id="[^"]*"><option value="deepseek-flash"><\/option><option value="deepseek-v4-pro"><\/option><option value="glm-5"><\/option><\/datalist>/)
+  // provider 未匹配时模型候选退回全部模型，用于提示；列表本身由 Menu 在展开时渲染。
+  assert.match(html, /class="tf_combo"/)
 })
 
-test('缺少路由建议时退化为纯输入', () => {
+test('缺少路由建议时仍可自由输入', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
@@ -559,8 +604,58 @@ test('缺少路由建议时退化为纯输入', () => {
     t,
     pricing: fakePricing({ routes: [], fileEntries: [FILE_ENTRY] }),
   }))
-  assert.match(html, /<input(?=[^>]*\bvalue="deepseek-official")(?=[^>]*\blist=")[^>]*>/)
-  assert.match(html, /<datalist id="[^"]*"><\/datalist>/)
+  assert.match(html, /class="tf_comboInput"[^>]*value="deepseek-official"/)
+})
+
+test('新条目默认不分峰谷，也不带峰谷规则引用', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, { t, pricing: fakePricing({ fileEntries: [] }) }))
+  // 编辑器里没有条目时不该出现任何条目卡片；峰谷规则下拉在未勾选
+  // 「区分峰谷」时禁用，说明新条目不会预设规则。
+  assert.match(html, /editor\.noEntries/)
+  assert.doesNotMatch(html, /tf_comboInput/)
+})
+
+test('保存键位于编辑器顶部而非页面底部', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
+  const saveBar = html.indexOf('tf_saveBar')
+  // 用自定义条目区的标题定位内容起点，避开 settings.intro 那段说明文字。
+  const entriesSection = html.indexOf('editor.entriesTitle')
+  assert.ok(saveBar >= 0, '应有保存工具栏')
+  assert.ok(entriesSection >= 0, '应有条目编辑区')
+  assert.ok(saveBar < entriesSection, '保存工具栏应排在编辑内容之前')
+  assert.match(html, /data-primary="true"[^>]*>editor\.save</)
+  // 底部不再重复一个保存键，避免两处入口语义重叠。
+  assert.equal(html.split('editor.save<').length - 1, 1)
+})
+
+test('币种使用带本地化名称的下拉框', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
+  // 币种与峰谷规则都是下拉框；币种选项带 Intl 提供的本地化名称。
+  assert.match(html, /<option value="CNY"[^>]*>CNY 人民币<\/option>/)
+  assert.match(html, /<option value="USD"[^>]*>USD 美元<\/option>/)
+  assert.doesNotMatch(html, /type="text" value="CNY"/)
+})
+
+test('文件里的自定义币种会补进下拉框', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    // XTS 不在 ICU 的货币枚举里，但 Intl.DisplayNames 认识它——正好同时验证
+    // 「补进选项」与「带本地化名称」两件事。
+    pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, currency: 'XTS' }] }),
+  }))
+  assert.match(html, /<option value="XTS"[^>]*>XTS 测试货币代码<\/option>/)
 })
 
 //#endregion
