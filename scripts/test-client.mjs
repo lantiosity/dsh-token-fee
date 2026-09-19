@@ -436,6 +436,32 @@ test('时区使用带 UTC 偏移的下拉框', () => {
   assert.match(html, /value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)</)
   assert.match(html, /value="UTC"[^>]*>UTC \(GMT\+0\)</)
   assert.match(html, /value="America\/New_York"[^>]*>America\/New_York \(GMT-4\)</)
+  assert.match(html, /value="Asia\/Calcutta"[^>]*>Asia\/Calcutta \(GMT\+5:30\)</)
+})
+
+test('时区按 UTC 偏移升序排列而非字母序', () => {
+  const zones = clientExports.supportedTimezones()
+  assert.ok(zones.length > 100, `应枚举出全部时区，实际 ${zones.length}`)
+  let previous = null
+  for (const zone of zones) {
+    const offset = clientExports.timezoneOffsetMinutes(zone)
+    assert.notEqual(offset, null, `${zone} 应能解析出偏移`)
+    if (previous !== null) {
+      assert.ok(previous <= offset, `${zone}（${offset}）不应排在偏移 ${previous} 的时区之后`)
+    }
+    previous = offset
+  }
+  // 两端分别是地球上最西与最东的时区，字母序不会这样排列。
+  assert.match(zones[0], /^Pacific\/(Midway|Niue|Pago_Pago)$/)
+  assert.match(zones.at(-1), /^Pacific\/(Kiritimati|Tongatapu)$/)
+})
+
+test('同一偏移内按名字排序且 UTC 居首', () => {
+  const zones = clientExports.supportedTimezones()
+  const zero = zones.filter(zone => clientExports.timezoneOffsetMinutes(zone) === 0)
+  assert.equal(zero[0], 'UTC')
+  const rest = zero.slice(1)
+  assert.deepEqual(rest, [...rest].sort((a, b) => a.localeCompare(b)))
 })
 
 test('未定价提示带有可用的「去配置价格」按钮', () => {

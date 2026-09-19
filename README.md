@@ -114,7 +114,7 @@ node scripts/install.mjs --check    # 校验既有安装
 
 | 字段 | 含义 |
 | --- | --- |
-| `timezone` | IANA 时区名，例如 `Asia/Shanghai`。 |
+| `timezone` | IANA 时区名，例如 `Asia/Shanghai`。配置界面的下拉框按当前 UTC 偏移排序，同偏移内按名字排序且 `UTC` 居首。 |
 | `peakDays` | 高峰星期，`0` 为周日。 |
 | `peakWindows` | 高峰时段，`["HH:MM", "HH:MM"]` 的左闭右开区间。 |
 
