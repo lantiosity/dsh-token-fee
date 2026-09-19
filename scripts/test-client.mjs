@@ -99,14 +99,38 @@ const clientExports = loaded.factory(makeRequire())
 
 //#region 测试替身
 
+/** 带峰谷两档价的内置条目替身。 */
+const SPLIT_BUILTIN = {
+  id: 'builtin-deepseek-official-flash-cny',
+  provider: 'deepseek-official',
+  model: 'deepseek-flash',
+  currency: 'CNY',
+  schedule: { timezone: 'Asia/Shanghai', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00']] },
+  prices: {
+    peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+    offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+  },
+  note: 'DeepSeek 官方定价。',
+}
+
+/** 只有单一价格的内置条目替身。 */
+const FLAT_BUILTIN = {
+  id: 'builtin-flat',
+  provider: 'deepseek-official',
+  model: 'flat-model',
+  currency: 'CNY',
+  schedule: null,
+  prices: { peak: { input: 3, cacheRead: 0.1, cacheWrite: 0, output: 9 } },
+}
+
 /** 价目表句柄替身：只提供组件读取所需的最小面。 */
-function fakePricing(overrides = {}) {
+function fakePricing(options = {}) {
   const snapshot = {
     status: 'ready',
-    error: null,
+    error: options.error ?? null,
     data: {
       displayCurrency: 'CNY',
-      entries: [{
+      entries: options.entries ?? [{
         id: 'mine',
         provider: 'deepseek-official',
         model: 'deepseek-flash',
@@ -114,7 +138,7 @@ function fakePricing(overrides = {}) {
         schedule: null,
         prices: { peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 } },
       }],
-      builtin: [],
+      builtin: options.builtin ?? [SPLIT_BUILTIN],
       schedules: {},
       builtinSchedules: { deepseek: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] } },
       file: { path: '/tmp/token-fee.json', exists: false, entries: [], schedules: null, error: null },
@@ -127,7 +151,6 @@ function fakePricing(overrides = {}) {
     load: async () => {},
     save: async () => snapshot.data,
     reset: async () => snapshot.data,
-    ...overrides,
   }
 }
 
@@ -149,6 +172,10 @@ const t = (key, params) => {
     'editor.fileHint': '用户价目表：{path}',
     'editor.addEntry': '新增条目',
     'editor.addSchedule': '新增规则',
+    'editor.offPeakShort': '空闲 · {bucket}',
+    'editor.tariffPeak': '高峰',
+    'editor.tariffOffPeak': '空闲',
+    'editor.tariffFlat': '单价',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
   }
   const template = dictionary[key] ?? key
@@ -282,6 +309,140 @@ test('设置页渲染价目表与峰谷规则编辑器', () => {
   assert.match(html, /token-fee\.json/)
   assert.match(html, /新增条目/)
   assert.match(html, /新增规则/)
+})
+
+test('内联调度被采纳为可编辑的命名规则', () => {
+  const adopted = clientExports.adoptPricing([
+    {
+      id: 'inline',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] },
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    },
+  ], null)
+  assert.equal(adopted.entries.length, 1)
+  assert.equal(adopted.entries[0].schedule, 'inline-1')
+  assert.equal(adopted.schedules['inline-1'].timezone, 'UTC')
+})
+
+test('命名引用与无调度条目原样保留', () => {
+  const adopted = clientExports.adoptPricing([
+    { id: 'a', provider: 'x', model: 'y', currency: 'CNY', schedule: 'deepseek', prices: { peak: {} } },
+    { id: 'b', provider: 'x', model: 'z', currency: 'CNY', schedule: null, prices: { peak: {} } },
+  ], { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '01:00']] } })
+  assert.equal(adopted.entries[0].schedule, 'deepseek')
+  assert.equal(adopted.entries[1].schedule, null)
+  assert.deepEqual(Object.keys(adopted.schedules), ['mine'])
+})
+
+test('采纳不会改写原始条目对象', () => {
+  const source = {
+    id: 'inline',
+    provider: 'x',
+    model: 'y',
+    currency: 'CNY',
+    schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] },
+    prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+  }
+  const adopted = clientExports.adoptPricing([source], null)
+  assert.equal(typeof source.schedule, 'object')
+  assert.equal(adopted.entries[0].schedule, 'inline-1')
+  assert.notEqual(adopted.entries[0], source)
+})
+
+test('点击判定把锚点与面板都当作内部', () => {
+  const inside = { current: { contains: target => target === 'in' } }
+  const elsewhere = { current: { contains: () => false } }
+  const empty = { current: null }
+  assert.equal(clientExports.isInsideRoots('in', [inside]), true)
+  assert.equal(clientExports.isInsideRoots('in', [elsewhere, inside]), true)
+  assert.equal(clientExports.isInsideRoots('out', [inside, elsewhere]), false)
+  assert.equal(clientExports.isInsideRoots('out', [empty]), false)
+  assert.equal(clientExports.isInsideRoots(null, [inside]), false)
+  assert.equal(clientExports.isInsideRoots(undefined, [inside]), false)
+})
+
+test('computeView 按供应商分组并按桶累计金额', () => {
+  const entries = [{
+    id: 'a',
+    provider: 'p',
+    model: 'm',
+    currency: 'CNY',
+    schedule: null,
+    prices: { peak: { input: 2, cacheRead: 0.5, cacheWrite: 0, output: 8 } },
+  }]
+  const view = clientExports.computeView({
+    rows: [
+      { provider: 'p', model: 'm', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+      { provider: 'p', model: 'm', tariff: 'offPeak', input: 0, cacheRead: 1_000_000, cacheWrite: 0, output: 0 },
+    ],
+  }, entries, 'CNY')
+  assert.equal(view.groups.length, 1)
+  assert.equal(view.amount, 2.5)
+  assert.equal(view.groups[0].models[0].buckets.input, 1_000_000)
+  assert.equal(view.groups[0].models[0].buckets.cacheRead, 1_000_000)
+  assert.equal(view.groups[0].models[0].amounts.input, 2)
+  assert.equal(view.groups[0].models[0].amounts.cacheRead, 0.5)
+  assert.equal(view.unpricedCount, 0)
+})
+
+test('computeView 把未定价模型单独标记且不计入合计', () => {
+  const view = clientExports.computeView({
+    rows: [{ provider: 'my-gateway', model: 'glm-5', tariff: 'peak', input: 1000, cacheRead: 0, cacheWrite: 0, output: 0 }],
+  }, [], 'CNY')
+  assert.equal(view.amount, 0)
+  assert.equal(view.tokens, 1000)
+  assert.equal(view.unpricedCount, 1)
+  assert.equal(view.groups[0].models[0].priced, false)
+})
+
+test('内置价目按「四列价格 + 高峰/空闲两行」的表格排版', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
+  assert.match(html, /tf_priceTable/)
+  assert.match(html, /缓存未命中<\/span><span class="tf_priceHead">缓存命中<\/span><span class="tf_priceHead">缓存写入<\/span><span class="tf_priceHead">输出<\/span>/)
+  assert.match(html, /<span class="tf_priceRowLabel">高峰<\/span>(<span class="tf_priceValue">[^<]*<\/span>){4}/)
+  assert.match(html, /<span class="tf_priceRowLabel">空闲<\/span><span class="tf_priceValue">¥1\.00\/M<\/span>/)
+})
+
+test('不区分峰谷的条目只渲染一行价格', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, { t, pricing: fakePricing({ builtin: [FLAT_BUILTIN] }) }))
+  assert.match(html, /<span class="tf_priceRowLabel">单价<\/span><span class="tf_priceValue">¥3\.00\/M<\/span>/)
+  assert.doesNotMatch(html, /tf_priceRowLabel">高峰/)
+  assert.doesNotMatch(html, /tf_priceRowLabel">空闲/)
+})
+
+test('时区使用带 UTC 偏移的下拉框', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
+  assert.match(html, /<select class="tf_select">/)
+  assert.match(html, /value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)</)
+  assert.match(html, /value="UTC"[^>]*>UTC \(GMT\+0\)</)
+  assert.match(html, /value="America\/New_York"[^>]*>America\/New_York \(GMT-4\)</)
+})
+
+test('未定价提示带有可用的「去配置价格」按钮', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'my-gateway', model: 'glm-5' },
+      rows: [{ provider: 'my-gateway', model: 'glm-5', tariff: 'peak', input: 500, cacheRead: 0, cacheWrite: 0, output: 500 }],
+    }),
+    t,
+    pricing: fakePricing(),
+  }))
+  assert.match(html, /未配置价格/)
 })
 
 //#endregion

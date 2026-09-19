@@ -291,6 +291,109 @@ await test('缺失的用户文件回落到内置层', async () => {
   assert.equal(snapshot.entries.length, 2)
 })
 
+await test('保存端点落盘时保留条目对命名调度的字符串引用', async () => {
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: file })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  assert.ok(route, '保存端点应已注册')
+
+  const body = JSON.stringify({
+    entries: [{
+      id: 'mine',
+      provider: 'my-gateway',
+      model: 'deepseek-flash',
+      currency: 'CNY',
+      schedule: 'deepseek',
+      prices: { peak: { input: 1.5, cacheRead: 0.03, cacheWrite: 0, output: 6 } },
+    }],
+  })
+  const request = {
+    method: 'POST',
+    headers: { host: '127.0.0.1:3080', 'x-dsh-token-fee-action': 'save', 'content-type': 'application/json' },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from(body)
+    },
+  }
+  const response = {
+    status: 0,
+    payload: null,
+    writeHead(status) {
+      this.status = status
+    },
+    end(text) {
+      this.payload = JSON.parse(text)
+    },
+  }
+  route.handler(request, response)
+  await new Promise((resolve) => {
+    const check = () => (response.payload === null ? setTimeout(check, 5) : resolve())
+    check()
+  })
+  assert.equal(response.status, 200)
+  assert.equal(response.payload.ok, true)
+  const written = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(written.entries[0].schedule, 'deepseek', '命名引用必须原样落盘')
+  assert.equal(response.payload.entries.find(entry => entry.id === 'mine').schedule.timezone, 'Asia/Shanghai')
+})
+
+await test('非回环来源被端点拒绝', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: join(dir, 'token-fee.json') })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = {
+    status: 0,
+    writeHead(status) {
+      this.status = status
+    },
+    end() {},
+  }
+  route.handler({
+    method: 'GET',
+    headers: { host: 'example.com' },
+    socket: { remoteAddress: '203.0.113.5' },
+    async *[Symbol.asyncIterator]() {},
+  }, response)
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(response.status, 403)
+})
+
+await test('reset 清空用户层，回到内置条目', async () => {
+  const { mkdtemp, readFile, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    entries: [{
+      id: 'mine',
+      provider: 'my-gateway',
+      model: 'deepseek-flash',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  }), 'utf8')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await store.refresh()
+  assert.equal(store.snapshot().entries.length, 3)
+  await store.reset()
+  const after = store.snapshot()
+  assert.equal(after.entries.length, 2)
+  assert.equal(after.file.exists, false)
+  assert.equal(after.file.entries.length, 0)
+  await assert.rejects(readFile(file, 'utf8'), { code: 'ENOENT' })
+})
+
 //#endregion
 
 for (const failure of failures) {
