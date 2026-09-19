@@ -70,9 +70,11 @@ const hasRealReact = react !== null && jsxRuntime !== null && reactDomServer !==
 const stubReact = {
   useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
   useEffect: () => {},
+  useLayoutEffect: () => {},
   useMemo: factory => factory(),
   useRef: value => ({ current: value }),
   useCallback: fn => fn,
+  useId: () => ':stub:',
 }
 
 const stubJsxRuntime = {
@@ -724,6 +726,42 @@ test('新条目默认不分峰谷，也不带峰谷规则引用', () => {
   assert.equal(fresh.schedule, null, '新条目不该预设峰谷规则')
   assert.equal(fresh.prices.offPeak, undefined, '新条目默认统一单价')
   assert.ok(fresh.id.startsWith('custom-'))
+})
+
+test('面板以锚点中线居中', () => {
+  const viewport = { width: 1280, height: 800 }
+  // 锚点在视口正中：面板中线应与锚点中线重合。
+  const centered = clientExports.panelPosition(
+    { left: 600, width: 80, top: 700 },
+    400,
+    viewport,
+  )
+  assert.equal(centered.left, 600 + 40 - 200)
+  // 垂直方向贴着锚点上沿往上排，留 8px 间隙。
+  assert.equal(centered.bottom, 800 - 700 + 8)
+})
+
+test('面板靠边时被夹回视口内', () => {
+  const viewport = { width: 1280, height: 800 }
+  // 锚点贴近左边缘：面板不能跑到屏幕外。
+  const left = clientExports.panelPosition({ left: 0, width: 40, top: 700 }, 400, viewport)
+  assert.equal(left.left, 12)
+  // 锚点贴近右边缘：右侧同样要留出边距。
+  const right = clientExports.panelPosition({ left: 1260, width: 20, top: 700 }, 400, viewport)
+  assert.equal(right.left, 1280 - 400 - 12)
+})
+
+test('面板比视口还宽时以左边距为准', () => {
+  // 宁可右侧溢出也不让左边界丢失，否则面板左侧内容点不到。
+  const narrow = clientExports.panelPosition({ left: 300, width: 40, top: 700 }, 2000, { width: 800, height: 600 })
+  assert.equal(narrow.left, 12)
+})
+
+test('面板宽度按标签页区分', () => {
+  const cssText = styleTags[0].textContent
+  // 明细只有合计与几张卡片，撑到价格设置的宽度会显得空。
+  assert.match(cssText, /\.tf_panel\[data-tab=detail\]\{width:max-content/)
+  assert.match(cssText, /\.tf_panel\[data-tab=pricing\]\{width:min\(560px/)
 })
 
 //#endregion
