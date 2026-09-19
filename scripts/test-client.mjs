@@ -232,6 +232,12 @@ test('样式标签被注入一次', () => {
   assert.equal(styleTags[0].dataset.plugin, '@lantiosity/dsh-token-fee')
 })
 
+test('样式让费用胶囊与内置统计胶囊并排而非换行', () => {
+  const cssText = styleTags[0].textContent
+  assert.match(cssText, /:has\(> \[data-composer-stats\]\):has\(> \.tf_root\)\{[^}]*flex-direction:row/)
+  assert.match(cssText, /:has\(> \[data-composer-stats\]\):has\(> \.tf_root\)>\*:not\(\[data-composer-stats\]\):not\(\.tf_root\)\{flex:0 0 100%\}/)
+})
+
 test('apply 注册费用胶囊与设置页', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
