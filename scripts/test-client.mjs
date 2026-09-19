@@ -232,10 +232,12 @@ test('样式标签被注入一次', () => {
   assert.equal(styleTags[0].dataset.plugin, '@lantiosity/dsh-token-fee')
 })
 
-test('样式让费用胶囊与内置统计胶囊并排而非换行', () => {
+test('样式只描述自己的元素，不改写其他插件的布局', () => {
   const cssText = styleTags[0].textContent
-  assert.match(cssText, /:has\(> \[data-composer-stats\]\):has\(> \.tf_root\)\{[^}]*flex-direction:row/)
-  assert.match(cssText, /:has\(> \[data-composer-stats\]\):has\(> \.tf_root\)>\*:not\(\[data-composer-stats\]\):not\(\.tf_root\)\{flex:0 0 100%\}/)
+  // 依赖 ui-chat 的私有标记或改写承载其他 occupant 的父容器布局，都会在官方
+  // 调整结构时造成破坏性失败（输入区被撑变形），而不只是视觉降级。
+  assert.doesNotMatch(cssText, /data-composer-stats/, '不得依赖 ui-chat 的私有标记')
+  assert.doesNotMatch(cssText, /:has\(>/, '不得改写承载其他 occupant 的父容器布局')
 })
 
 test('apply 注册费用胶囊与设置页', () => {
