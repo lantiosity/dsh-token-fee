@@ -50,6 +50,7 @@ jobs:
             'lib/pricing.js',
             'scripts/install.mjs',
             'README.md',
+            'README.en.md',
             'LICENSE',
           ]
           const missing = required.filter(path => !files.includes(path))

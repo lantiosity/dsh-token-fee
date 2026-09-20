@@ -47,6 +47,7 @@
     "cordis.patch.yml",
     "scripts/install.mjs",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "scripts": {

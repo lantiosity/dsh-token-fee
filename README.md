@@ -1,6 +1,9 @@
 # dsh-token-fee
 
 [![CI](https://github.com/lantiosity/dsh-token-fee/actions/workflows/ci.yml/badge.svg)](https://github.com/lantiosity/dsh-token-fee/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[English](README.en.md) | 中文
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 网页端（`dsh web`）提供**会话实时花费**显示。
 
@@ -198,7 +201,3 @@ npm run test:process  # 进程级回归：用 --patch overlay 装进真实 dsh w
 | `lib/index.js` | host 半：`tokenFee` 会话投影 + 价目表读写端点 |
 | `lib/client.js` | 浏览器半：费用胶囊、明细面板、价格编辑器、设置页 |
 | `cordis.patch.yml` | bundle 层 patch，挂载 host 半 |
-
-## 许可
-
-MIT
