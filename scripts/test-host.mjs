@@ -480,6 +480,95 @@ await test('缺少 llm 服务时路由建议为空而不是请求失败', async 
   assert.deepEqual(response.payload.routes, [])
 })
 
+await test('handler 必须把 Promise 交给 webserver', () => {
+  // webserver 用 await route.handler(...) 并挂 .catch() 做 per-request 兜底；
+  // handler 返回 undefined 会让兜底失效，逃逸的 rejection 落到 app-boot 的全局
+  // unhandledRejection 处理器，而它会直接 process.exit(1)。
+  const { context, captured } = fakeContext()
+  apply(context, {})
+  for (const route of captured.routes) {
+    const result = route.handler(getRequest(), captureResponse())
+    assert.ok(result instanceof Promise, `${route.path} 的 handler 必须返回 Promise`)
+    // 让被拒绝的 Promise 有归属，避免测试进程自己触发 unhandledRejection。
+    result.catch(() => {})
+  }
+})
+
+await test('llm.listProviders 抛错时端点仍返回 200', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const llm = {
+    listProviders: () => { throw new Error('llm exploded') },
+    listModels: async () => [],
+  }
+  const { context, captured } = fakeContext(undefined, { llm })
+  apply(context, { pricingFile: join(dir, 'token-fee.json') })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = captureResponse()
+  await route.handler(getRequest(), response)
+  assert.equal(response.status, 200)
+  assert.deepEqual(response.payload.routes, [])
+  assert.equal(response.payload.ok, true)
+})
+
+await test('GET 同时返回归一化层与原始层', async () => {
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    schedules: { 'my-peak': { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] } },
+    entries: [{
+      id: 'named',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      schedule: 'my-peak',
+      prices: {
+        peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+        offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+      },
+    }],
+  }), 'utf8')
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: file })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = captureResponse()
+  await route.handler(getRequest(), response)
+  const { file: payload } = response.payload
+  // 归一化层：调度已展开为内联对象，供计价与只读展示。
+  assert.equal(typeof payload.entries[0].schedule, 'object')
+  assert.equal(payload.entries[0].schedule.timezone, 'Asia/Shanghai')
+  // 原始层：命名引用保持字符串，编辑草稿靠它才能不丢引用。
+  assert.equal(payload.rawEntries[0].schedule, 'my-peak')
+})
+
+await test('reset 失败时返回 500 而不是让异常逃逸', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  // 把价目表路径指向一个目录：rm(force) 删不掉目录，必然抛错。
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: dir })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing/reset')
+  const request = {
+    method: 'POST',
+    headers: { host: '127.0.0.1:3080', 'x-dsh-token-fee-action': 'reset' },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() {},
+  }
+  const response = captureResponse()
+  await route.handler(request, response)
+  assert.equal(response.status, 500)
+  assert.equal(response.payload.ok, false)
+  assert.equal(response.payload.error, 'reset-failed')
+})
+
 //#endregion
 
 for (const failure of failures) {

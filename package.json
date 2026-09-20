@@ -25,8 +25,11 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-primitives"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
   },
@@ -38,8 +41,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs",
+    "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/test-process.mjs",
     "test": "node scripts/test-pricing.mjs && node scripts/test-host.mjs && node scripts/test-client.mjs",
+    "test:process": "node scripts/test-process.mjs",
     "verify": "npm run check && npm test"
   },
   "license": "MIT",

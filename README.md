@@ -102,7 +102,13 @@ node scripts/install.mjs --check    # 校验既有安装
 
 配置界面里 `provider` 与 `model` 是自由输入框，同时带一份来自**当前 dsh 配置**的建议列表（`ctx.llm` 的已注册路由与模型）：`provider` 列出全部已配置路由，`model` 在 `provider` 匹配上之后收窄到该路由的模型，未匹配时列出全部模型。建议只是便利——adapter 允许接受未列出的模型 id，因此输入不受限。
 
-单价在界面上以字符串草稿编辑，保存时才转成数字：`Number("1.")` 会得到 `1`，若在输入过程中就转换，小数点会被吞掉，用户根本敲不出小数。非法值（负数、非数字）在保存时明确报错，而不是静默变成 0。
+单价在界面上以字符串草稿编辑，保存时才转成数字：`Number("1.")` 会得到 `1`，若在输入过程中就转换，小数点会被吞掉，用户根本敲不出小数。
+
+无法解析或为负的输入在保存时**按 0 写入**并提示哪些字段被归零，而不是让整次保存失败——价格表是人工维护的，一个笔误不该连带其它条目的修改一起丢掉。输入框在敲错的那一刻就会标红，悬停有说明。若要让 host 直接拒绝，可手工编辑文件：端点校验是 fail-loud 的。
+
+保存前客户端还会拦下三种「界面点得出来、host 必然拒绝」的状态并给出本地化提示：删光所有条目、条目没填模型 id、勾了「区分峰谷」却没选规则。
+
+条目对命名调度（`schedules` 里的名字）的引用在编辑往返中原样保留：GET 端点同时返回归一化层与原始层，编辑器草稿用原始层，因此改一处规则仍然会传播到引用它的所有条目。
 
 ### 匹配规则
 
@@ -138,25 +144,29 @@ node scripts/install.mjs --check    # 校验既有安装
 ## 已知限制
 
 - **胶囊独占一行**：`conversation.composer.dock` 的多个 occupant 各占一行是 dsh 的约定（ui-chat 的统计行也是靠 `data-composer-stats` 这个双向约定让输入框为它留出空间）。费用胶囊因此显示在内置「轮次 / 速度」与「token 用量」胶囊的下方。把两者并排需要改写 InputBar 根容器的布局并依赖其他插件的私有标记，官方一旦调整 dock 结构就会让输入区变形，因此插件不做这件事。
+- **价目表端点只接受回环来源**：读写端点要求 peer socket 是回环且 `Host` 头是回环或 `localhost`。经 Tailscale 等**远程地址**访问 GUI 时端点返回 403，费用面板会显示「未配置价格」并在设置页给出失败原因。这是 CSRF 与 DNS-rebinding 防线的一部分：放宽判据需要复用 connection 插件的信任判定，而该判定位于客户端包内，link 安装的插件解析不到它，重写一份又会重复安全关键逻辑。经远程地址使用时，请直接编辑 `<DSH_HOME>/token-fee.json`。
 - **中国法定节假日**：官方的高峰判定不含法定节假日，本插件按自然工作日判定，因此法定节假日会被高估为高峰价。需要精确计费时，请为节假日单独调整规则或改用固定单价。
 - **跨币种**：不同币种的金额不会换算合并。胶囊与合计只统计展示币种，其他币种在明细中单独提示。
-- **金额在浏览器侧换算**：会话投影只携带 token 桶，因此修改价格立即生效、也不会让持久化的投影缓存失效；代价是同一份价目表在 host 与浏览器两侧各有一份匹配实现，二者由测试保持同构。
+- **金额在浏览器侧换算**：会话投影只携带 token 桶，因此修改价格立即生效、也不会让持久化的投影缓存失效。代价是 host 与浏览器各有一份换算实现（浏览器侧无法 import host 模块），`test-client.mjs` 里有一组断言把两侧结果钉在一起，避免它们悄悄漂移。
 - **历史归属**：已记录用量的时段归属由事件时间决定并固化在投影里；修改峰谷规则只影响此后产生的用量。
+- **配置 schema 是手写的 Standard Schema**：契约要求插件导出 `Config`，而 cordis 只调用 `Config['~standard'].validate`（`vendor/cordis/src/fiber.ts`）。这里没有 `import '@deepseek-ai/schemastery'`，因为本插件以 link 方式安装，Node 从插件真实路径逐级向上找 `node_modules`，够不到 `$DSH_HOME/profiles/node_modules`（实测 `ERR_MODULE_NOT_FOUND`），引入该包会让插件装载失败。手写的校验器同样在装载期报错、填默认值并拒绝未知键。
 
 ## 开发
 
 ```bash
-npm run check   # 语法检查
-npm test        # 三个测试套件
+npm run check         # 语法检查
+npm test              # 三个离线套件
+npm run test:process  # 进程级回归：用 --patch overlay 装进真实 dsh web 并探测端点
 ```
 
 | 套件 | 覆盖 |
 | --- | --- |
 | `scripts/test-pricing.mjs` | 价目表校验、匹配优先级、峰谷判定、费用换算 |
-| `scripts/test-host.mjs` | `apply` 的注册行为、投影折叠（含替换与重试）、价目表文件读写 |
-| `scripts/test-client.mjs` | 模块工厂装配、`apply` 的 slot 注册，以及用真实 React 渲染三个组件 |
+| `scripts/test-host.mjs` | `apply` 的注册行为、投影折叠（含替换与重试）、价目表文件读写、端点鉴权与 Promise 归属 |
+| `scripts/test-client.mjs` | 模块工厂装配、`apply` 的 slot 注册、真实 React 渲染、以及 host / 浏览器两侧换算的一致性 |
+| `scripts/test-process.mjs` | 经 `--patch` overlay 装进真实 `dsh web`：端点契约、异常路径，以及**端点出错后进程仍然存活** |
 
-`test-client.mjs` 会从 `<DSH_HOME>/profiles/node_modules` 解析真实 React；找不到时退回替身并跳过渲染用例。
+`test-client.mjs` 会从 `<DSH_HOME>/profiles/node_modules` 解析真实 React；找不到时退回替身并跳过渲染用例。`test-process.mjs` 需要 `dsh` 在 PATH 上，否则整体跳过（退出码 0），因此可安全地在无 dsh 的环境里运行。
 
 代码结构：
 

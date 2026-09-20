@@ -43,11 +43,23 @@ function tryRequire(id) {
   }
 }
 
-/** 最小 DOM 替身：client.js 只用它注入一次样式标签。 */
+/** 最小 DOM 替身：client.js 用它注入样式标签，并支持按 id 去重与移除。 */
 const styleTags = []
 globalThis.document = {
-  querySelector: () => null,
-  createElement: () => ({ dataset: {}, textContent: '' }),
+  // 只认 client.js 真正发出的选择器形状：style[data-plugin-css="<id>"]。
+  querySelector: (selector) => {
+    const match = /data-plugin-css="([^"]+)"/.exec(selector)
+    if (match === null) return null
+    return styleTags.find(tag => tag.dataset.pluginCss === match[1]) ?? null
+  },
+  createElement: () => ({
+    dataset: {},
+    textContent: '',
+    remove() {
+      const index = styleTags.indexOf(this)
+      if (index >= 0) styleTags.splice(index, 1)
+    },
+  }),
   head: { appendChild: tag => styleTags.push(tag) },
 }
 globalThis.window = { innerWidth: 1280, innerHeight: 900 }
@@ -285,10 +297,37 @@ test('模块导出 apply 与 inject', () => {
   assert.deepEqual(clientExports.inject, ['slots', 'locale'])
 })
 
-test('样式标签被注入一次', () => {
-  assert.equal(styleTags.length, 1)
+test('样式随 apply 注入且幂等', () => {
+  // 注入是一个 effect：卸载即撤销，重新 apply 复用同一标签而不堆积。
+  const first = fakeClientContext()
+  clientExports.apply(first.ctx)
+  assert.equal(styleTags.length, 1, '首次 apply 应注入一个样式标签')
   assert.match(styleTags[0].textContent, /\.tf_pill\{/)
   assert.equal(styleTags[0].dataset.plugin, '@lantiosity/dsh-token-fee')
+  const second = fakeClientContext()
+  clientExports.apply(second.ctx)
+  assert.equal(styleTags.length, 1, '重复 apply 不应堆积样式标签')
+})
+
+test('样式 effect 的 disposer 移除本次注入的标签', () => {
+  // 先把已有标签清掉，让下一次 apply 成为真正的创建者。
+  while (styleTags.length > 0) styleTags[0].remove()
+  const disposers = []
+  const ctx = {
+    effect: (factory) => {
+      const disposer = factory()
+      if (typeof disposer === 'function') disposers.push(disposer)
+      return disposer
+    },
+    locale: { register: () => {}, bind: () => t },
+    slots: { inject: () => {}, register: () => () => {} },
+  }
+  clientExports.apply(ctx)
+  assert.equal(styleTags.length, 1)
+  for (const dispose of disposers) dispose()
+  assert.equal(styleTags.length, 0, 'disposer 应移除样式标签')
+  // 复原：后续用例仍需要一个已注入的样式表。
+  clientExports.apply(fakeClientContext().ctx)
 })
 
 test('样式只描述自己的元素，不改写其他插件的布局', () => {
@@ -762,6 +801,58 @@ test('面板宽度按标签页区分', () => {
   // 明细只有合计与几张卡片，撑到价格设置的宽度会显得空。
   assert.match(cssText, /\.tf_panel\[data-tab=detail\]\{width:max-content/)
   assert.match(cssText, /\.tf_panel\[data-tab=pricing\]\{width:min\(560px/)
+})
+
+test('host 与浏览器两侧的费用换算结果一致', async () => {
+  // 两侧各有一份换算实现（host 的 pricing.js 与 client 的 computeView）。浏览器
+  // 侧无法 import host 模块（不同的加载机制），所以只能靠这条断言把它们钉住。
+  const hostPricing = await import('../lib/pricing.js')
+  const entries = hostPricing.validatePricing([
+    {
+      id: 'split',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      schedule: 'deepseek',
+      prices: {
+        peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+        offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+      },
+    },
+  ])
+  const rows = [
+    { provider: 'my-gateway', model: 'glm-5', tariff: 'peak', input: 1_000_000, cacheRead: 500_000, cacheWrite: 0, output: 250_000 },
+    { provider: 'my-gateway', model: 'glm-5', tariff: 'offPeak', input: 2_000_000, cacheRead: 0, cacheWrite: 0, output: 1_000_000 },
+  ]
+  const host = hostPricing.computeCost(rows, entries, 'CNY')
+  const browser = clientExports.computeView({ rows }, entries, 'CNY')
+  assert.equal(browser.amount, host.amount, '合计金额必须一致')
+  assert.equal(browser.tokens, host.tokens, 'token 总数必须一致')
+  assert.equal(browser.unpricedCount, host.unpriced.length)
+  assert.equal(browser.groups.length, 1)
+  // host 按行给桶明细，浏览器按模型合并；逐桶金额也要对得上。
+  const hostByBucket = {}
+  for (const model of host.models) {
+    for (const [bucket, value] of Object.entries(model.components)) {
+      hostByBucket[bucket] = (hostByBucket[bucket] ?? 0) + value
+    }
+  }
+  const browserModel = browser.groups[0].models[0]
+  for (const [bucket, value] of Object.entries(hostByBucket)) {
+    assert.equal(browserModel.amounts[bucket], value, `${bucket} 金额必须一致`)
+  }
+})
+
+test('两侧对未定价模型的判定一致', async () => {
+  const hostPricing = await import('../lib/pricing.js')
+  const rows = [{ provider: 'nobody', model: 'nothing', tariff: 'peak', input: 100, cacheRead: 0, cacheWrite: 0, output: 100 }]
+  const host = hostPricing.computeCost(rows, hostPricing.BUILTIN_PRICING, 'CNY')
+  const browser = clientExports.computeView({ rows }, hostPricing.BUILTIN_PRICING, 'CNY')
+  assert.equal(host.amount, 0)
+  assert.equal(browser.amount, 0)
+  assert.equal(host.unpriced.length, 1)
+  assert.equal(browser.unpricedCount, 1)
+  assert.equal(browser.tokens, 200)
 })
 
 //#endregion
