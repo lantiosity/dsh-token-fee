@@ -205,7 +205,7 @@ function fakePricing(options = {}) {
       entries: options.entries ?? fileEntries,
       builtin: options.builtin ?? [SPLIT_BUILTIN],
       schedules: {},
-      builtinSchedules: { deepseek: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] } },
+      builtinSchedules: { deepseek: { timezone: 'Asia/Shanghai', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00'], ['14:00', '18:00']] } },
       routes: options.routes ?? [
         {
           id: 'deepseek-official',
@@ -267,6 +267,35 @@ const t = (key, params) => {
     'editor.invalidPriceHint': '不是有效的非负数字，保存时会按 0 处理',
     'editor.savedWithCorrections': '已保存。以下输入不是有效的非负数字，已按 0 保存：{fields}',
     'editor.dirtyHint': '修改后请点「保存」写入文件。',
+    'editor.builtinSchedule': '内置规则',
+    'editor.customSchedule': '自定义规则',
+    'editor.builtinScheduleOverridden': '内置规则 · 已覆盖',
+    'editor.revertSchedule': '恢复内置',
+    'editor.collapse': '完成',
+    'editor.scheduleName': '规则名称',
+    'editor.scheduleNone': '单价',
+    'editor.timezone': '时区',
+    'editor.peakDays': '高峰星期',
+    'editor.peakWindows': '高峰时段',
+    'editor.addWindow': '新增时段',
+    'weekday.mon': '一',
+    'weekday.tue': '二',
+    'weekday.wed': '三',
+    'weekday.thu': '四',
+    'weekday.fri': '五',
+    'weekdayLong.sun': '周日',
+    'weekdayLong.mon': '周一',
+    'weekdayLong.tue': '周二',
+    'weekdayLong.wed': '周三',
+    'weekdayLong.thu': '周四',
+    'weekdayLong.fri': '周五',
+    'editor.dayRange': '{from} 至 {to}',
+    'editor.schedulesTitle': '峰谷规则',
+    'editor.peakPrices': '高峰单价（每百万 token）',
+    'editor.prices': '单价（每百万 token）',
+    'editor.offPeakPrices': '空闲单价（每百万 token）',
+    'editor.splitTariff': '区分峰谷',
+    'editor.listSeparator': '、',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
   }
   const template = dictionary[key] ?? key
@@ -298,6 +327,30 @@ function render(element) {
   } finally {
     console.error = originalError
   }
+}
+
+/**
+ * 渲染规则编辑表单。
+ *
+ * 规则卡片默认收敛成只读摘要，编辑控件只有展开后才存在，因此时区下拉、星期
+ * 按钮、时段输入这些断言必须直接渲染表单组件。
+ * @param overrides - 覆盖默认的 props。
+ * @returns 静态 HTML。
+ */
+function renderScheduleEditor(overrides = {}) {
+  return render(react.createElement(clientExports.ScheduleEditor, {
+    name: 'deepseek',
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00']] },
+    scheduleNames: ['deepseek'],
+    builtin: false,
+    overridden: false,
+    t,
+    onChange: () => {},
+    onRename: () => {},
+    onRemove: () => {},
+    onCollapse: () => {},
+    ...overrides,
+  }))
 }
 
 /** 构造一个捕获 slot 注册的客户端上下文替身。 */
@@ -592,10 +645,8 @@ test('不区分峰谷的条目只渲染一行价格', () => {
 })
 
 test('时区使用带 UTC 偏移的下拉框', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
+  // 规则默认收起，因此直接渲染规则表单，而不是走收敛态的卡片。
+  const html = renderScheduleEditor()
   assert.match(html, /<select class="tf_select">/)
   assert.match(html, /value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)</)
   assert.match(html, /value="UTC"[^>]*>UTC \(GMT\+0\)</)
@@ -741,11 +792,12 @@ test('币种与峰谷规则都是下拉框，选项带本地化名称', () => {
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
   const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
-  // 峰谷规则的时区下拉始终存在（规则区独立于条目编辑态）。
-  assert.match(html, /<option value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)<\/option>/)
+  // 时区下拉在展开规则表单后出现。
+  assert.match(renderScheduleEditor(), /<option value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)<\/option>/)
   // 币种下拉只在条目编辑态出现，收敛态不该有可编辑的币种控件。按 option 的
   // value 判断而不是它的本地化名称：后者随运行时 locale 变化。
   assert.doesNotMatch(html, /<option value="CNY"/)
+  assert.doesNotMatch(html, /tf_combo/)
 })
 
 test('已保存的自定义条目按内置条目的格式呈现', () => {
@@ -811,6 +863,232 @@ test('新条目默认不分峰谷，也不带峰谷规则引用', () => {
   assert.equal(fresh.prices.offPeak, undefined, '新条目默认统一单价')
   assert.ok(fresh.id.startsWith('custom-'))
 })
+
+//#region 峰谷规则的编辑与保存
+
+/** 一条编辑态草稿：价格是字符串，与输入框里的中间态一致。 */
+function draftEntry(overrides = {}) {
+  return {
+    id: 'draft-1',
+    provider: 'tokenrhythm',
+    model: 'deepseek-flash',
+    currency: 'CNY',
+    schedule: null,
+    prices: { peak: { input: '1', cacheRead: '0.1', cacheWrite: '', output: '2' } },
+    ...overrides,
+  }
+}
+
+test('选中一个规则就等于开启峰谷，并以高峰价为初值', () => {
+  // 规则下拉曾经在未勾选「区分峰谷」时被禁用，界面看上去就是「峰谷规则配不了」。
+  const next = clientExports.applyScheduleChoice(draftEntry(), 'deepseek')
+  assert.equal(next.schedule, 'deepseek')
+  assert.deepEqual(next.prices.offPeak, { input: '1', cacheRead: '0.1', cacheWrite: '', output: '2' })
+  // 高峰价原样保留，用户只改需要改的那一档。
+  assert.deepEqual(next.prices.peak, { input: '1', cacheRead: '0.1', cacheWrite: '', output: '2' })
+})
+
+test('选回「统一单价」清掉空闲价与规则引用', () => {
+  const split = clientExports.applyScheduleChoice(draftEntry(), 'deepseek')
+  const flat = clientExports.applyScheduleChoice(split, '')
+  assert.equal(flat.schedule, null)
+  assert.equal(flat.prices.offPeak, undefined)
+  assert.deepEqual(flat.prices.peak, split.prices.peak)
+})
+
+test('重新选中规则不会用高峰价覆盖已填好的空闲价', () => {
+  const split = draftEntry({
+    schedule: 'deepseek',
+    prices: {
+      peak: { input: '1', cacheRead: '0.1', cacheWrite: '', output: '2' },
+      offPeak: { input: '0.5', cacheRead: '0.05', cacheWrite: '', output: '1' },
+    },
+  })
+  const next = clientExports.applyScheduleChoice(split, 'night')
+  assert.equal(next.schedule, 'night')
+  assert.equal(next.prices.offPeak.input, '0.5')
+})
+
+test('勾选「区分峰谷」时沿用已有引用，否则取第一条规则', () => {
+  assert.equal(clientExports.applySplitToggle(draftEntry(), true, ['deepseek']).schedule, 'deepseek')
+  const kept = clientExports.applySplitToggle(draftEntry({ schedule: 'night' }), true, ['deepseek', 'night'])
+  assert.equal(kept.schedule, 'night')
+  // 没有任何规则时留空，交给 collectProblems 拦下，而不是伪造一个引用。
+  assert.equal(clientExports.applySplitToggle(draftEntry(), true, []).schedule, null)
+  const off = clientExports.applySplitToggle(clientExports.applySplitToggle(draftEntry(), true, ['deepseek']), false, ['deepseek'])
+  assert.equal(off.schedule, null)
+  assert.equal(off.prices.offPeak, undefined)
+})
+
+test('保存时保留尚未被引用的峰谷规则', () => {
+  // 回归：曾按「是否被条目引用」过滤规则，于是「先建规则、再挂到条目上」这条
+  // 最自然的路径会在保存时把刚建好的规则悄悄丢掉，手工写进文件的规则也会被
+  // 一次无关的保存抹掉。
+  const { entries, schedules } = clientExports.buildSavePayload(
+    [draftEntry()],
+    { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
+    t,
+  )
+  assert.deepEqual(Object.keys(schedules), ['mine'])
+  assert.equal(entries[0].schedule, undefined, '统一单价的条目不该带规则引用')
+})
+
+test('保存时按条目分别写入高峰与空闲价', () => {
+  const entry = clientExports.applyScheduleChoice(draftEntry(), 'mine')
+  const { entries, schedules } = clientExports.buildSavePayload([entry], { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } }, t)
+  assert.equal(entries[0].schedule, 'mine')
+  assert.deepEqual(entries[0].prices.peak, { input: 1, cacheRead: 0.1, cacheWrite: 0, output: 2 })
+  assert.deepEqual(entries[0].prices.offPeak, { input: 1, cacheRead: 0.1, cacheWrite: 0, output: 2 })
+  assert.deepEqual(Object.keys(schedules), ['mine'])
+})
+
+test('保存时把非法价格归零并报告字段', () => {
+  const { entries, corrected } = clientExports.buildSavePayload(
+    [draftEntry({ prices: { peak: { input: '0s', cacheRead: '', cacheWrite: '', output: '6' } } })],
+    {},
+    t,
+  )
+  assert.deepEqual(entries[0].prices.peak, { input: 0, cacheRead: 0, cacheWrite: 0, output: 6 })
+  assert.equal(corrected.length, 1)
+  assert.match(corrected[0], /缓存未命中/)
+})
+
+test('没有任何规则时保存传 null 而不是空对象', () => {
+  // host 对 `schedules` 的判据是 null / 非 null，空对象会被写进文件。
+  assert.equal(clientExports.buildSavePayload([draftEntry()], {}, t).schedules, null)
+})
+
+test('峰谷规则区列出内置与自定义规则，收敛成摘要卡片', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({
+      fileSchedules: { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
+      fileEntries: [{
+        ...FILE_ENTRY,
+        provider: 'my-gateway',
+        model: 'glm-5',
+        schedule: 'mine',
+        prices: {
+          peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+          offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+        },
+      }],
+    }),
+  }))
+  // 条目卡片与两张规则卡片各有一个「编辑」键；展开前不渲染编辑控件。
+  assert.match(html, /<span class="tf_entryName">deepseek<\/span><span class="tf_entryScope">内置规则<\/span>/)
+  assert.match(html, /<span class="tf_entryName">mine<\/span><span class="tf_entryScope">自定义规则<\/span>/)
+  assert.match(html, /<p class="tf_ruleSummary">Asia\/Shanghai · 周一 至 周五 · 09:00–12:00、14:00–18:00<\/p>/)
+  assert.match(html, /<p class="tf_ruleSummary">UTC · 周一 · 00:00–06:00<\/p>/)
+  assert.equal(html.split('>编辑<').length - 1, 3, '一个条目 + 两条规则各有一个编辑键')
+  assert.doesNotMatch(html, /tf_ruleName/, '收敛态没有改名输入框')
+  assert.doesNotMatch(html, /tf_iconButton/, '收敛态没有删除键')
+})
+
+test('规则摘要用星期全称并把连续三天以上压成区间', () => {
+  const summary = peakDays => clientExports.scheduleSummary(
+    { timezone: 'Asia/Shanghai', peakDays, peakWindows: [['09:00', '12:00']] },
+    t,
+  )
+  // 星期按钮上放的是单字（一/五），摘要里放不下语境，一律用全称。
+  assert.match(summary([1, 2, 3, 4, 5]), /^Asia\/Shanghai · 周一 至 周五 · 09:00–12:00$/)
+  assert.match(summary([1]), /· 周一 ·/)
+  // 两天不压缩：`周一 至 周二` 并不比 `周一、周二` 短。
+  assert.match(summary([1, 2]), /· 周一、周二 ·/)
+  assert.match(summary([1, 3]), /· 周一、周三 ·/)
+  // 周日排在最后：与周五之间隔着周六，不构成区间。
+  assert.match(summary([5, 0]), /· 周日、周五 ·/)
+})
+
+test('规则表单可以改名，并有与条目一致的「完成」键', () => {
+  const html = renderScheduleEditor()
+  assert.match(html, /<input class="tf_ruleName"[^>]*value="deepseek"/)
+  assert.match(html, />完成</)
+  assert.match(html, /高峰星期/)
+  assert.match(html, /时区/)
+})
+
+test('内置规则不给删除键，自定义规则给', () => {
+  // 内置规则总能被用户层覆盖，删除它没有意义；自定义规则可以删。
+  const custom = renderScheduleEditor({ name: 'mine' })
+  const builtin = renderScheduleEditor({ name: 'deepseek', builtin: true })
+  // 每个高峰时段各有一个 ✕，头部那个才是「删除整条规则」。
+  assert.equal(custom.split('tf_iconButton').length - 1, 2)
+  assert.equal(builtin.split('tf_iconButton').length - 1, 1)
+  assert.match(builtin, /内置规则/)
+})
+
+test('覆盖内置规则后它仍是内置规则，并可一键恢复', () => {
+  // 内置条目按名字引用 `deepseek`，一旦允许把这条覆盖改名，内置条目会悄悄退回
+  // 出厂规则，而用户以为自己只是改了个名字。
+  const overridden = renderScheduleEditor({ name: 'deepseek', builtin: true, overridden: true })
+  assert.doesNotMatch(overridden, /tf_ruleName/)
+  assert.match(overridden, />恢复内置</)
+  assert.doesNotMatch(renderScheduleEditor({ name: 'deepseek', builtin: true }), />恢复内置</, '没覆盖过就没有可恢复的东西')
+})
+
+test('覆盖过的内置规则在收敛态标为「已覆盖」', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({ fileSchedules: { deepseek: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } } }),
+  }))
+  assert.match(html, /<span class="tf_entryName">deepseek<\/span><span class="tf_entryScope">内置规则 · 已覆盖<\/span>/)
+  assert.match(html, /<p class="tf_ruleSummary">UTC · 周一 · 00:00–06:00<\/p>/)
+})
+
+test('规则下拉在未开启峰谷时也可用', () => {
+  // 回归：这个下拉曾经是 `disabled: !split`，于是「配置峰谷规则」在界面上看起来
+  // 根本点不动。直接渲染条目表单，而不是走收敛态的卡片。
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const html = render(react.createElement(clientExports.EntryEditor, {
+    entry: draftEntry(),
+    index: 0,
+    scheduleNames: ['deepseek', 'mine'],
+    routes: [],
+    onOverlayToggle: () => {},
+    onChange: () => {},
+    onRemove: () => {},
+    onCollapse: () => {},
+    t,
+  }))
+  assert.doesNotMatch(html, /<select[^>]*disabled/)
+  // 规则下拉列出内置与自定义规则，并停在没有规则上。
+  assert.match(html, /<option value=""[^>]*>[^<]*<\/option><option value="deepseek">deepseek<\/option><option value="mine">mine<\/option>/)
+  // 统一单价时只有高峰价一档，勾选框未勾上。
+  assert.match(html, /<input type="checkbox"\/>/)
+  assert.match(html, /高峰单价（每百万 token）|单价（每百万 token）/)
+  assert.doesNotMatch(html, /空闲单价/)
+})
+
+test('条目表单在区分峰谷时补出空闲价一栏', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const split = clientExports.applyScheduleChoice(draftEntry(), 'mine')
+  const html = render(react.createElement(clientExports.EntryEditor, {
+    entry: split,
+    index: 0,
+    scheduleNames: ['deepseek', 'mine'],
+    routes: [],
+    onOverlayToggle: () => {},
+    onChange: () => {},
+    onRemove: () => {},
+    onCollapse: () => {},
+    t,
+  }))
+  assert.match(html, /<option value="mine" selected="">mine<\/option>/)
+  assert.match(html, /高峰单价（每百万 token）/)
+  assert.match(html, /空闲单价（每百万 token）/)
+  assert.match(html, /<input type="checkbox" checked=""/)
+})
+
+//#endregion
 
 test('面板以锚点中线居中', () => {
   const viewport = { width: 1280, height: 800 }

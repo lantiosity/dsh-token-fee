@@ -136,6 +136,14 @@ Before saving, the client also blocks three states that the UI can construct but
 
 An entry's reference to a named schedule (a name in `schedules`) survives editing round-trips verbatim: the GET endpoint returns both the normalized and the raw layer, and the editor draft uses the raw one, so editing a rule still propagates to every entry referencing it.
 
+The entry form's "Tariff schedule" dropdown is always enabled: picking a rule turns peak/off-peak on (the off-peak prices start as a copy of the peak ones, so you only edit the tier you care about), and picking "Flat price" clears both the off-peak prices and the reference. A rule added in the schedules section does **not** have to be referenced by an entry first — building the rule and attaching it afterwards is the natural order, so an unreferenced rule is written to the file as-is; deletion happens only through the ✕ on the rule card.
+
+Rule cards mirror entry cards: collapsed by default into "name + one-line summary (timezone · peak weekdays · peak windows) + Edit", expanding on Edit and collapsing on Done. A custom rule's name is edited in place at the title, committed on blur or Enter; renaming updates every entry that references it, while an empty or duplicate name is flagged in place and reverts.
+
+A rule whose name exists in the built-in table is always a "Built-in" rule: no rename, no delete button, even once you have overridden it (then it reads "Built-in · overridden" and gains a "Restore built-in" button). That is deliberate — the built-in entries reference `deepseek` by name, so letting that override be renamed would silently drop the built-in entries back to the factory rule while you thought you had only renamed something.
+
+Deleting a rule that entries still reference clears those references but keeps the off-peak prices, and saving reports that a rule must be picked again; silently discarding prices the user typed would hurt more than re-picking a rule.
+
 ### Matching rules
 
 Entries match on `(provider, model)`, highest priority first: **exact → provider wildcard → model wildcard → full wildcard**; within one priority the earliest entry wins.
@@ -155,6 +163,8 @@ A `schedule` describes the peak window:
 | `peakWindows` | Peak windows, half-open `["HH:MM", "HH:MM"]` intervals. |
 
 The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference.
+
+You can also edit that built-in rule directly in the UI: the built-in pricing entries reference the schedule **name** `deepseek` rather than an inlined copy of the rule, so your override applies to the built-in entries too — when the official peak windows change, one edit is enough. The built-in rule card has no delete button (it can always be overridden); custom rule cards do.
 
 ## Built-in pricing
 

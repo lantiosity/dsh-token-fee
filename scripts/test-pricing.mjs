@@ -69,10 +69,28 @@ test('内置表只包含 deepseek-official 的价格', () => {
 test('内置条目带有峰谷两档价格与调度', () => {
   for (const item of BUILTIN_PRICING) {
     assert.ok(item.prices.offPeak, `${item.id} 缺少空闲价`)
-    assert.deepEqual(item.schedule.timezone, 'Asia/Shanghai')
-    assert.deepEqual([...item.schedule.peakDays], [1, 2, 3, 4, 5])
+    // 命名引用而非内联对象：内置条目每次重建有效表都会重新解析它，用户在内置
+    // 规则上的改动才能作用到内置条目。
+    assert.equal(item.schedule, 'deepseek', `${item.id} 应引用命名规则`)
     assert.equal(item.prices.offPeak.input * 2, item.prices.peak.input)
   }
+  const item = normalizeEntry(BUILTIN_PRICING[0], 'builtin')
+  assert.equal(item.schedule.timezone, 'Asia/Shanghai')
+  assert.deepEqual([...item.schedule.peakDays], [1, 2, 3, 4, 5])
+})
+
+test('覆盖内置规则后，内置条目的时段判定跟着变', () => {
+  // 用户在内置 deepseek 规则上改时区 / 时段（例如官方调整了高峰时间）时，内置
+  // 条目必须跟着走；内联对象会让它们永远停在出厂规则上。
+  const overridden = validateSchedules({
+    deepseek: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] },
+  })
+  const entries = mergePricingLayers([BUILTIN_PRICING], overridden)
+  const flash = entries.find(item => item.model === 'deepseek-flash')
+  // 周一 00:30 UTC：出厂规则（北京时间 08:30）是空闲，覆盖后的规则是高峰。
+  const at = Date.UTC(2026, 7, 17, 0, 30)
+  assert.equal(tariffAt(flash, at), 'peak')
+  assert.equal(tariffAt(normalizeEntry(BUILTIN_PRICING[0]), at), 'offPeak')
 })
 
 test('缺少 model 的条目被拒绝', () => {

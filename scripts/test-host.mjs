@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict'
 import { apply, Config, createProjectionDefinition, name, PricingStore, resolveConfig, usageOf } from '../lib/index.js'
+import { tariffAt } from '../lib/pricing.js'
 
 let passed = 0
 const failures = []
@@ -303,6 +304,35 @@ await test('PricingStore 读取用户文件并覆盖内置层', async () => {
   assert.equal(snapshot.file.path, file)
 })
 
+await test('用户文件里的命名调度覆盖内置规则，并作用到内置条目', async () => {
+  // 「先建规则、再挂到条目上」以及「改内置规则」都必须真的生效：内置条目引用
+  // 的是命名规则 `deepseek`，所以文件里的同名覆盖会一路作用到内置条目的时段判定。
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    schedules: { deepseek: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
+    entries: [{
+      id: 'mine',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  }), 'utf8')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await store.refresh()
+  const snapshot = store.snapshot()
+  assert.equal(snapshot.file.error, null)
+  assert.equal(snapshot.schedules.deepseek.timezone, 'UTC')
+  const flash = snapshot.entries.find(entry => entry.model === 'deepseek-flash')
+  // 周一 00:30 UTC：出厂规则（北京时间 08:30）是空闲，覆盖后的规则是高峰。
+  assert.equal(tariffAt(flash, Date.UTC(2026, 7, 17, 0, 30)), 'peak')
+})
+
 await test('损坏的用户文件被报告且不污染有效表', async () => {
   const { mkdtemp, writeFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
@@ -379,6 +409,59 @@ await test('保存端点落盘时保留条目对命名调度的字符串引用',
   const written = JSON.parse(await readFile(file, 'utf8'))
   assert.equal(written.entries[0].schedule, 'deepseek', '命名引用必须原样落盘')
   assert.equal(response.payload.entries.find(entry => entry.id === 'mine').schedule.timezone, 'Asia/Shanghai')
+})
+
+await test('尚未被条目引用的调度也会原样落盘', async () => {
+  // 界面上「先建规则、再挂到条目上」是最自然的操作顺序，host 不得因为一条规则
+  // 暂时没有被引用就把它丢掉——那会让刚建好的规则在保存时凭空消失。
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: file })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  assert.ok(route, '保存端点应已注册')
+
+  const body = JSON.stringify({
+    schedules: { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
+    entries: [{
+      id: 'mine',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  })
+  const request = {
+    method: 'POST',
+    headers: { host: '127.0.0.1:3080', 'x-dsh-token-fee-action': 'save', 'content-type': 'application/json' },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from(body)
+    },
+  }
+  const response = {
+    status: 0,
+    payload: null,
+    writeHead(status) {
+      this.status = status
+    },
+    end(text) {
+      this.payload = JSON.parse(text)
+    },
+  }
+  route.handler(request, response)
+  await new Promise((resolve) => {
+    const check = () => (response.payload === null ? setTimeout(check, 5) : resolve())
+    check()
+  })
+  assert.equal(response.status, 200)
+  const written = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(written.schedules.mine.timezone, 'UTC', '未被引用的规则也要落盘')
+  assert.equal(response.payload.file.schedules.mine.peakWindows[0][1], '06:00', 'GET 要把它还给编辑器')
+  assert.equal(response.payload.schedules.mine.timezone, 'UTC', '有效调度表里也要有它')
 })
 
 await test('非回环来源被端点拒绝', async () => {
