@@ -162,6 +162,8 @@ A `schedule` describes the peak window:
 | `peakDays` | Peak weekdays, `0` being Sunday. |
 | `peakWindows` | Peak windows, half-open `["HH:MM", "HH:MM"]` intervals. |
 
+In the UI each peak window is entered as two narrow fields per clock, digits only: a two-digit value out of range (`25` hours, `61` minutes) keeps only the last digit, so an impossible time cannot be typed at all, while an unpadded intermediate (`9:5`) is padded to `09:05` on save. A row that does not end after it starts is flagged in place and blocked before saving.
+
 The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference.
 
 You can also edit that built-in rule directly in the UI: the built-in pricing entries reference the schedule **name** `deepseek` rather than an inlined copy of the rule, so your override applies to the built-in entries too — when the official peak windows change, one edit is enough. The built-in rule card has no delete button (it can always be overridden); custom rule cards do.

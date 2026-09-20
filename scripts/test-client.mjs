@@ -290,6 +290,12 @@ const t = (key, params) => {
     'weekdayLong.thu': '周四',
     'weekdayLong.fri': '周五',
     'editor.dayRange': '{from} 至 {to}',
+    'editor.hour': '时',
+    'editor.minute': '分',
+    'editor.windowInvalid': '结束需晚于开始',
+    'editor.errorNoWindow': '规则 {rule} 至少要有一个高峰时段。',
+    'editor.errorWindowFormat': '规则 {rule} 的第 {index} 个高峰时段没填全（时 00–23、分 00–59）。',
+    'editor.errorWindowOrder': '规则 {rule} 的第 {index} 个高峰时段必须结束得比开始晚。',
     'editor.schedulesTitle': '峰谷规则',
     'editor.peakPrices': '高峰单价（每百万 token）',
     'editor.prices': '单价（每百万 token）',
@@ -1001,6 +1007,70 @@ test('规则摘要用星期全称并把连续三天以上压成区间', () => {
   assert.match(summary([1, 3]), /· 周一、周三 ·/)
   // 周日排在最后：与周五之间隔着周六，不构成区间。
   assert.match(summary([5, 0]), /· 周日、周五 ·/)
+})
+
+test('时与分各占一个窄输入框，超范围的值敲不进去', () => {
+  // 整条 `HH:MM` 用一个宽框收，框宽远大于内容，而且 25:61 要到保存时才被拒绝。
+  assert.equal(clientExports.sanitizeClock('hour', '25'), '5')
+  assert.equal(clientExports.sanitizeClock('hour', '23'), '23')
+  assert.equal(clientExports.sanitizeClock('hour', '2'), '2')
+  assert.equal(clientExports.sanitizeClock('minute', '61'), '1')
+  assert.equal(clientExports.sanitizeClock('minute', '59'), '59')
+  // 非数字一律丢掉，所以粘贴 `09:00` 只会留下 `09`。
+  assert.equal(clientExports.sanitizeClock('hour', '09:00'), '09')
+  assert.equal(clientExports.sanitizeClock('hour', 'a1b2'), '12')
+  assert.equal(clientExports.sanitizeClock('hour', 'abc'), '')
+  assert.equal(clientExports.sanitizeClock('hour', ''), '')
+})
+
+test('时刻在草稿里可处于中间态，写文件前补零', () => {
+  assert.deepEqual(clientExports.clockParts('09:00'), { hour: '09', minute: '00' })
+  assert.deepEqual(clientExports.clockParts('9:5'), { hour: '9', minute: '5' })
+  // 清空一半时另一半点仍然显示得出来，用户能接着往下敲。
+  assert.deepEqual(clientExports.clockParts(':05'), { hour: '', minute: '05' })
+  assert.deepEqual(clientExports.clockParts('12:'), { hour: '12', minute: '' })
+  assert.equal(clientExports.padClock('9:5'), '09:05')
+  assert.equal(clientExports.padClock('09:00'), '09:00')
+  // host 只认补零后的值，解析不了的交给校验报错。
+  assert.equal(clientExports.padClock(''), '')
+})
+
+test('保存时把时段补零成 HH:MM', () => {
+  const { schedules } = clientExports.buildSavePayload([], { mine: {
+    timezone: 'UTC',
+    peakDays: [1],
+    peakWindows: [['9:5', '18:0'], ['20:00', '22:30']],
+  } }, t)
+  assert.deepEqual(schedules.mine.peakWindows, [['09:05', '18:00'], ['20:00', '22:30']])
+})
+
+test('保存前拦下倒序与没填全的高峰时段', () => {
+  const entry = clientExports.applyScheduleChoice(draftEntry(), 'mine')
+  const problems = windows => clientExports.collectProblems(
+    [entry],
+    { mine: { timezone: 'UTC', peakDays: [1], peakWindows: windows } },
+    ['mine'],
+    t,
+  )
+  assert.deepEqual(problems([['09:00', '12:00']]), [])
+  assert.deepEqual(problems([['9:0', '12:0']]), [], '未补零不算错，保存时会补齐')
+  assert.match(problems([['12:05', '09:07']])[0], /必须结束得比开始晚/)
+  assert.match(problems([['09:00', '09:00']])[0], /必须结束得比开始晚/)
+  assert.match(problems([['09:00', '']])[0], /没填全/)
+  assert.match(problems([])[0], /至少要有一个高峰时段/)
+})
+
+test('时段行渲染四个窄框，倒序时就地标红', () => {
+  const html = renderScheduleEditor()
+  assert.equal(html.split('class="tf_clock"').length - 1, 4, '起止各一个时框与一个分框')
+  assert.match(html, /<input class="tf_clock"[^>]*maxLength="2"[^>]*value="09"\/>/)
+  assert.match(html, /<input class="tf_clock"[^>]*maxLength="2"[^>]*value="12"\/>/)
+  assert.doesNotMatch(html, /tf_windowHint/)
+  const broken = renderScheduleEditor({
+    schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['12:05', '09:07']] },
+  })
+  assert.match(broken, /class="tf_windowHint">结束需晚于开始</)
+  assert.equal(broken.split('data-invalid="true"').length - 1, 4, '整行四个框都标红')
 })
 
 test('规则表单可以改名，并有与条目一致的「完成」键', () => {
