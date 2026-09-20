@@ -1,6 +1,6 @@
 {
   "name": "@lantiosity/dsh-token-fee",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Real-time per-session token cost for the DeepSeek Harness web GUI, with per-provider pricing and configurable peak/off-peak tariffs",
   "keywords": [
     "deepseek",
