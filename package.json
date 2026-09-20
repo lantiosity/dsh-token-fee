@@ -11,6 +11,15 @@
   ],
   "type": "module",
   "main": "lib/index.js",
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lantiosity/dsh-token-fee.git"
+  },
+  "homepage": "https://github.com/lantiosity/dsh-token-fee#readme",
+  "bugs": "https://github.com/lantiosity/dsh-token-fee/issues",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
@@ -44,7 +53,12 @@
     "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/test-process.mjs",
     "test": "node scripts/test-pricing.mjs && node scripts/test-host.mjs && node scripts/test-client.mjs",
     "test:process": "node scripts/test-process.mjs",
-    "verify": "npm run check && npm test && npm run test:process"
+    "verify": "npm run check && npm test && npm run test:process",
+    "pack:check": "npm pack --dry-run"
+  },
+  "devDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "license": "MIT",
   "publishConfig": {

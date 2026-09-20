@@ -34,13 +34,28 @@ function test(label, body) {
 const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const profileModules = join(dshHome, 'profiles', 'node_modules')
 
-/** 从 profile 的 node_modules 解析真实依赖；解析失败时返回 null。 */
+/**
+ * 解析一个真实依赖。
+ *
+ * 先找 dsh profile 的 `node_modules`（本机真实运行环境里的那一份），再退回本包
+ * 自己的 `node_modules`（CI 里由 devDependencies 提供）。两者都没有时返回 null，
+ * 渲染用例会跳过。
+ * @param id - 模块标识。
+ * @returns 模块，或 null。
+ */
 function tryRequire(id) {
-  try {
-    return createRequire(join(profileModules, 'noop.js'))(id)
-  } catch {
-    return null
+  const anchors = [
+    join(profileModules, 'noop.js'),
+    join(import.meta.dirname, '..', 'noop.js'),
+  ]
+  for (const anchor of anchors) {
+    try {
+      return createRequire(anchor)(id)
+    } catch {
+      // 换下一个锚点。
+    }
   }
+  return null
 }
 
 /** 最小 DOM 替身：client.js 用它注入样式标签，并支持按 id 去重与移除。 */
@@ -255,9 +270,29 @@ const t = (key, params) => {
 }
 
 /** 用真实 React 渲染一个元素为静态标记。 */
+/**
+ * 用服务端渲染器把元素渲染成静态标记。
+ *
+ * 组件本身只在浏览器里跑（bundle 由 Web Client 装载），这里借服务端渲染器做
+ * 字符串比对。`useLayoutEffect` 在服务端渲染下不执行且会告警，而定位钩子必须
+ * 无条件调用（hooks 规则），所以这条告警是测试手法的产物而非缺陷：面板只在
+ * 用户点开后才渲染，服务端渲染永远不会产出它。只抑制这一条，其余告警照常抛出。
+ * @param element - 要渲染的元素。
+ * @returns 静态 HTML。
+ */
 function render(element) {
   assert.ok(hasRealReact, '需要真实 React 才能渲染')
-  return reactDomServer.renderToStaticMarkup(element)
+  const originalError = console.error
+  console.error = (...args) => {
+    const first = typeof args[0] === 'string' ? args[0] : ''
+    if (first.includes('useLayoutEffect does nothing on the server')) return
+    originalError(...args)
+  }
+  try {
+    return reactDomServer.renderToStaticMarkup(element)
+  } finally {
+    console.error = originalError
+  }
 }
 
 /** 构造一个捕获 slot 注册的客户端上下文替身。 */

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 与 package.json 的 engines 对齐：^22.19 || >=24。
+        node: ['22.19', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # verify = check + 三个离线套件 + 进程级回归。CI 里没有 dsh，进程级套件会
+      # 自行跳过并以 0 退出，因此无需为此分叉命令。
+      - run: npm run verify
+
+  payload:
+    # 发布载荷必须闭合：files 未覆盖到的相对运行时导入会让装好的插件在装载期失败。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: 打包并核对载荷
+        run: |
+          npm pack --dry-run --json > pack.json
+          node - <<'NODE'
+          const report = JSON.parse(require('node:fs').readFileSync('pack.json', 'utf8'))
+          const files = report[0].files.map(entry => entry.path)
+          const required = [
+            'package.json',
+            'cordis.patch.yml',
+            'lib/index.js',
+            'lib/client.js',
+            'lib/pricing.js',
+            'scripts/install.mjs',
+            'README.md',
+            'LICENSE',
+          ]
+          const missing = required.filter(path => !files.includes(path))
+          if (missing.length > 0) {
+            console.error(`发布载荷缺少文件：${missing.join(', ')}`)
+            process.exit(1)
+          }
+          console.log(`发布载荷 ${files.length} 个文件，必需文件齐全`)
+          NODE
