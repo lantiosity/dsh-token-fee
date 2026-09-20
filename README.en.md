@@ -9,7 +9,7 @@ Real-time per-session token cost for the [DeepSeek Harness](https://github.com/d
 
 A cost pill appears under the composer, showing the current session's cost in CNY by default, rounded to the cent. Clicking it opens a panel that lists token counts and amounts for four buckets — **cache miss, cache hit, cache write and output** — grouped by provider and model, and lets you edit the pricing table in place.
 
-> Built and verified against DSH `0.1.6-alpha.1`.
+> Built and verified against DSH `0.1.6-alpha.2` (it also runs on `0.1.6-alpha.1`, where the pill and the stats pills stack instead of sharing a row).
 
 ## Features
 
@@ -181,7 +181,7 @@ All figures are CNY per million tokens, sourced from DeepSeek's official pricing
 
 ## Limitations
 
-- **The pill takes a line of its own**: `conversation.composer.dock` renders one occupant per line by design (the built-in stats row relies on the same two-way convention, `data-composer-stats`, to have the composer reserve space for it). The cost pill therefore appears below the built-in "turns / speed" and "token usage" pills. Placing them side by side would mean rewriting the InputBar root container's layout and depending on another plugin's private marker, so a change to the dock structure would deform the composer; the plugin does not do that.
+- **The pill shares a row with the built-in stats pills**: since 0.1.6-alpha.2 `conversation.composer.dock` is a single flex row (`.dock`), and every slot occupant is a direct child of it — spacing, centering and the top pad belong to the dock. The plugin therefore only makes its own root a shrink-wrapping node matching the built-in `StatsPills.root` (no width, no padding) and never rewrites the InputBar layout: turning a row into a column, or the reverse, means rewriting the parent that carries other occupants, and a dock structure change would deform the composer — a destructive failure, not a degradation.
 - **The pricing endpoints accept loopback origins only**: reads and writes require the peer socket to be loopback and the `Host` header to be loopback or `localhost`. Reaching the GUI over a **remote address** such as Tailscale makes the endpoints return 403, the cost panel shows everything as unpriced, and the settings page reports the failure. This is part of the CSRF and DNS-rebinding defense: relaxing it would mean reusing the connection plugin's trust decision, which lives in a client package that a link-installed plugin cannot resolve, and re-implementing it would duplicate security-critical logic. Over a remote address, edit `<DSH_HOME>/token-fee.json` directly.
 - **Chinese public holidays**: the official peak decision excludes public holidays, while this plugin decides by natural weekdays, so holidays are overpriced as peak. For exact billing, adjust the schedule for those days or use a flat price.
 - **Cross-currency**: amounts in different currencies are not converted or merged. The pill and the total count only the display currency; other currencies are reported separately in the breakdown.

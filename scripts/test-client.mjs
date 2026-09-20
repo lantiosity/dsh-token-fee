@@ -437,6 +437,20 @@ test('样式只描述自己的元素，不改写其他插件的布局', () => {
   assert.doesNotMatch(cssText, /:has\(>/, '不得改写承载其他 occupant 的父容器布局')
 })
 
+test('胶囊根节点交给 composer dock 排布，不独占整行', () => {
+  // 回归：0.1.6-alpha.2 把 composer dock 抽成了一行 flex，slot 的每个 occupant
+  // 都是它的直接子项。根节点写 width:100% 会吃掉整行剩余宽度，把官方统计胶囊
+  // 与上下文表盘挤到两端。
+  const rule = /\.tf_root\{([^}]*)\}/.exec(styleTags[0].textContent)
+  assert.ok(rule !== null, '应有 .tf_root 规则')
+  assert.doesNotMatch(rule[1], /(^|;)width:/, '不得自带宽度')
+  assert.doesNotMatch(rule[1], /padding/)
+  assert.doesNotMatch(rule[1], /(^|;)margin/)
+  assert.match(rule[1], /min-width:0/)
+  // 与官方 StatsPills.root 同一档次级文本。
+  assert.match(rule[1], /--dsh-content-font-size-secondary/)
+})
+
 test('apply 注册费用胶囊与设置页', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
