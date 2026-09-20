@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { apply, createProjectionDefinition, name, PricingStore, resolveConfig, usageOf } from '../lib/index.js'
+import { apply, Config, createProjectionDefinition, name, PricingStore, resolveConfig, usageOf } from '../lib/index.js'
 
 let passed = 0
 const failures = []
@@ -567,6 +567,32 @@ await test('reset 失败时返回 500 而不是让异常逃逸', async () => {
   assert.equal(response.status, 500)
   assert.equal(response.payload.ok, false)
   assert.equal(response.payload.error, 'reset-failed')
+})
+
+await test('Config 是 Standard Schema，填默认值并拒绝未知键', () => {
+  // cordis 只调 Config['~standard'].validate（vendor/cordis/src/fiber.ts:53），
+  // 要求同步返回 { value } 或 { issues }。
+  assert.equal(Config['~standard'].version, 1)
+  const validate = Config['~standard'].validate
+  assert.deepEqual(validate(undefined), { value: { displayCurrency: 'CNY' } })
+  assert.deepEqual(
+    validate({ displayCurrency: 'USD', pricingFile: 'x.json' }).value,
+    { displayCurrency: 'USD', pricingFile: 'x.json' },
+  )
+  // 未知键必须报错而不是被静默忽略——这是补 Config 的主要收益。
+  const unknown = validate({ displayCurrancy: 'USD' })
+  assert.equal(unknown.issues.length, 1)
+  assert.match(unknown.issues[0].message, /未知配置项/)
+  assert.match(unknown.issues[0].message, /displayCurrency/)
+  assert.ok(validate({ displayCurrency: 'RMB' }).issues, '拼错的币种应被拒绝')
+  assert.ok(validate({ pricingFile: '   ' }).issues, '空路径应被拒绝')
+  assert.ok(validate('nope').issues, '非对象应被拒绝')
+  assert.ok(validate({ pricing: [] }).issues, '空价目表应被拒绝')
+})
+
+await test('Config 校验是同步的（cordis 不支持异步校验）', () => {
+  const result = Config['~standard'].validate({ displayCurrency: 'CNY' })
+  assert.equal(typeof result?.then, 'undefined', 'validate 不得返回 Promise')
 })
 
 //#endregion

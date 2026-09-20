@@ -60,6 +60,26 @@ node scripts/install.mjs --check    # 校验既有安装
 
 插件**不会**为其他供应商内置任何价格：同一模型经由中转商、聚合网关或自建代理调用时价格并不相同，用官方价冒充会得出错误的账单。其他供应商的价格请自行添加条目。
 
+### 插件配置（cordis.yml）
+
+`cordis.yml` 里该条目的 `config` 接受四个键：
+
+| 键 | 默认 | 含义 |
+| --- | --- | --- |
+| `displayCurrency` | `CNY` | 胶囊与合计使用的展示币种，必须是 ICU 认识的 ISO 4217 代码。 |
+| `pricingFile` | `<DSH_HOME>/token-fee.json` | 用户价目表路径；相对路径按 `DSH_HOME` 解析。 |
+| `schedules` | 无 | 额外或覆盖内置的命名峰谷规则。 |
+| `pricing` | 无 | 额外或覆盖其它层的价目条目。 |
+
+配置在**装载期**校验：未知键、拼错的币种、结构不合法的条目都会让插件以 FAILED 结束，而不是被静默忽略——写错配置时应当立刻知道。跨字段规则（条目引用不存在的调度名）同样在装载期报错。
+
+```yaml
+- id: token-fee
+  config:
+    displayCurrency: USD
+    pricingFile: my-prices.json
+```
+
 ### 文件格式
 
 ```json

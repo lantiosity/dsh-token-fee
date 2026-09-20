@@ -14,17 +14,35 @@
  */
 
 import { spawn } from 'node:child_process'
-import { request as httpRequest } from 'node:http'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { request as httpRequest, createServer } from 'node:http'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const PORT = Number(process.env.TOKEN_FEE_TEST_PORT ?? 3199)
+const PORT = await freePort()
 const BASE = `http://127.0.0.1:${PORT}`
 const PRICING = `${BASE}/api/token-fee/pricing`
 const RESET = `${BASE}/api/token-fee/pricing/reset`
 const ACTION_HEADER = 'x-dsh-token-fee-action'
 const START_TIMEOUT_MS = 120_000
+
+/**
+ * 取一个当前空闲的端口。
+ *
+ * 固定端口会让并行运行互相冲突（本机 GUI 也可能占用），因此让 OS 分配后立刻释放。
+ * @returns 可用的端口号。
+ */
+async function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer()
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      server.close(() => (port > 0 ? resolve(port) : reject(new Error('未能取到空闲端口'))))
+    })
+  })
+}
 
 let passed = 0
 const failures = []
@@ -86,29 +104,55 @@ async function requestWithHost(path, host) {
   })
 }
 
-// 用 overlay 装载插件，而不是改动用户的 profile：退出后什么都不留。
+// 用 id 定向的 config 覆盖，而不是 insert 一个新条目：插件本就以 bundle 形式装在
+// web profile 里，insert 会让同一个插件跑两份实例（同 key 投影 + 同路径端点）。
+// 覆盖只把它指向临时价目表，用户的 ~/.dsh/token-fee.json 全程不被触碰。
 const overlayDir = await mkdtemp(join(tmpdir(), 'token-fee-process-'))
 const overlayPath = join(overlayDir, 'overlay.yml')
+const pricingFile = join(overlayDir, 'token-fee.json')
 await writeFile(overlayPath, [
-  '# 进程级回归用的临时 overlay：把插件插进 web profile 并只监听回环。',
-  '- insert:',
-  '    - id: token-fee-probe',
-  '      name: "@lantiosity/dsh-token-fee"',
-  '      config:',
-  `        pricingFile: ${JSON.stringify(join(overlayDir, 'token-fee.json'))}`,
+  '# 进程级回归用的临时 overlay：把已安装实例的价目表指向临时文件。',
+  '- id: token-fee',
+  '  config:',
+  `    pricingFile: ${JSON.stringify(pricingFile)}`,
   '',
 ].join('\n'), 'utf8')
 
 // shell 与 args 数组同用会触发 DEP0190；这里把整条命令拼成一个字符串，
 // 各段都是本脚本自己产生的值（端口是数字，路径来自 mkdtemp 并加了引号）。
 const command = `dsh --profile web --patch "${overlayPath}" --port ${PORT} --no-open`
-const child = spawn(command, { stdio: ['ignore', 'pipe', 'pipe'], shell: true })
+
+/**
+ * 启动子进程；无法启动时按「跳过」处理。
+ *
+ * 脚本承诺「没有 dsh 也能安全运行」，而 spawn 本身在受限沙箱、无 spawn 权限的
+ * 容器、禁止管道 stdio 的环境里都会失败——那时必须以 0 退出，不能把未捕获异常
+ * 抛出去，否则恰好是它最想避免的行为。
+ * @returns 子进程，或 null（无法启动）。
+ */
+function startChild() {
+  try {
+    return spawn(command, { stdio: ['ignore', 'pipe', 'pipe'], shell: true })
+  } catch (error) {
+    return { failed: String(error?.message ?? error) }
+  }
+}
+
+const spawned = startChild()
+if (spawned.failed !== undefined || spawned === null) {
+  console.log(`跳过进程级回归：无法启动 dsh（${spawned?.failed ?? 'spawn 返回空'}）。`)
+  process.exit(0)
+}
+const child = spawned
 
 let childOutput = ''
+let spawnFailure = null
 child.stdout.on('data', chunk => { childOutput += chunk })
 child.stderr.on('data', chunk => { childOutput += chunk })
 let childExited = null
 child.on('exit', (code) => { childExited = code ?? 0 })
+// 'error' 是异步的 spawn 失败（ENOENT/EPERM），与同步 throw 同样要按跳过处理。
+child.on('error', (error) => { spawnFailure = String(error?.message ?? error) })
 
 /** 停掉子进程并等它真正退出。 */
 async function stopChild() {
@@ -128,11 +172,34 @@ try {
   started = false
 }
 
+/** 清理临时目录，避免测试留下垃圾。 */
+async function cleanup() {
+  await rm(overlayDir, { recursive: true, force: true })
+}
+
+if (spawnFailure !== null) {
+  await cleanup()
+  console.log(`跳过进程级回归：无法启动 dsh（${spawnFailure}）。`)
+  process.exit(0)
+}
+
 if (!started) {
   await stopChild()
+  await cleanup()
   const hint = childExited !== null ? `子进程已退出（code ${childExited}）` : '启动超时'
   console.log(`跳过进程级回归：dsh web 未能在 ${PORT} 上应答（${hint}）。`)
   console.log(childOutput.trim().split('\n').slice(-6).join('\n'))
+  process.exit(0)
+}
+
+// 插件未装进 web profile 时端点不会注册，请求会落到 connection 的 /api 前缀
+// 处理器上（401）或直接 404。这是环境前提不满足，不是回归，因此跳过。
+const probe = await fetchWithTimeout(PRICING)
+if (probe.status === 401 || probe.status === 404) {
+  await stopChild()
+  await cleanup()
+  console.log(`跳过进程级回归：web profile 中未安装 @lantiosity/dsh-token-fee（探测返回 ${probe.status}）。`)
+  console.log('先运行 dsh plugin --profile web add <本目录>，再执行本用例。')
   process.exit(0)
 }
 
@@ -145,6 +212,10 @@ try {
     if (!Array.isArray(body.entries) || body.entries.length === 0) throw new Error('内置条目为空')
     if (!Array.isArray(body.routes)) throw new Error('routes 不是数组')
     if (typeof body.file?.path !== 'string') throw new Error('file.path 缺失')
+    // 临时 overlay 的 config 覆盖必须生效：写的是临时文件，不是用户的 ~/.dsh。
+    if (body.file.path !== pricingFile) {
+      throw new Error(`pricingFile 覆盖未生效：期望 ${pricingFile}，得到 ${body.file.path}`)
+    }
   })
 
   await test('缺少动作头的写请求被拒绝且进程存活', async () => {
@@ -223,6 +294,7 @@ try {
   })
 } finally {
   await stopChild()
+  await cleanup()
 }
 
 for (const failure of failures) {
