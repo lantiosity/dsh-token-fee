@@ -32,7 +32,7 @@ async function test(label, body) {
  * @param available - `ctx.get(name)` 能读到的可选服务。
  */
 function fakeContext(services = ['sessionProjections', 'webServer'], available = {}) {
-  const captured = { projections: [], routes: [], effects: 0 }
+  const captured = { projections: [], disposed: [], routes: [], effects: 0 }
   const context = {
     get: name => available[name],
     inject(deps, callback) {
@@ -47,7 +47,7 @@ function fakeContext(services = ['sessionProjections', 'webServer'], available =
         sessionProjections: {
           register(definition) {
             captured.projections.push(definition)
-            return () => {}
+            return () => { captured.disposed.push(definition) }
           },
         },
         webServer: {
@@ -148,6 +148,95 @@ await test('apply 注册投影与两个端点', () => {
   ])
 })
 
+/** 驱动一个 GET 端点并等它写出响应。 */
+async function getRoute(route) {
+  const request = {
+    method: 'GET',
+    headers: { host: '127.0.0.1:3080', accept: 'application/json' },
+    socket: { remoteAddress: '127.0.0.1' },
+    async *[Symbol.asyncIterator]() {},
+  }
+  const response = {
+    status: 0,
+    payload: null,
+    writeHead(status) {
+      this.status = status
+    },
+    end(text) {
+      this.payload = JSON.parse(text)
+    },
+  }
+  await route.handler(request, response)
+  return response
+}
+
+await test('价目表一变，投影状态版本就变，订阅者也收到通知', async () => {
+  // 折叠会把「样本属于哪个时段」写进持久化状态，而那是纯粹由价目表决定的派生值。
+  // 状态版本带着表指纹，检查点因此随表失效，历史样本会被按新表重折。
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await store.refresh()
+  const before = store.projectionVersion()
+  assert.ok(Number.isSafeInteger(before) && before >= 0)
+  const seen = []
+  const off = store.onChange(() => seen.push(store.projectionVersion()))
+
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    entries: [{
+      id: 'a',
+      provider: 'p',
+      model: 'm',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  }), 'utf8')
+  await store.refresh()
+  const after = store.projectionVersion()
+  assert.notEqual(after, before, '表变了版本必须变')
+  assert.deepEqual(seen, [after], '订阅者应恰好收到一次通知')
+
+  // 内容没变时 refresh 走 mtime 短路，不该重复通知。
+  await store.refresh()
+  assert.equal(seen.length, 1)
+  off()
+})
+
+await test('改价目表后投影注册被重装，版本号随之更新', async () => {
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: file })
+  // 文件还不存在，首次 refresh 不会改表，因此只注册了一次。
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(captured.projections.length, 1, '文件不存在时不该重装')
+  const first = captured.projections[0].stateVersion
+
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    entries: [{
+      id: 'a',
+      provider: 'p',
+      model: 'm',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  }), 'utf8')
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = await getRoute(route)
+  assert.equal(response.status, 200)
+  assert.equal(captured.projections.length, 2, '表变了应重新注册投影')
+  assert.equal(captured.disposed.length, 1, '旧注册应先撤下')
+  assert.notEqual(captured.projections[1].stateVersion, first)
+})
+
 await test('缺少服务时 apply 不注册任何东西', () => {
   const { context, captured } = fakeContext([])
   apply(context, undefined)
@@ -223,7 +312,7 @@ await test('高峰与空闲用量落入不同的桶', () => {
   assert.equal(view.rows.find(row => row.tariff === 'offPeak').input, 40)
 })
 
-await test('未匹配价目的供应商仍被记录', () => {
+await test('未匹配价目的供应商仍被记录，且标为不分峰谷', () => {
   const store = new PricingStore(resolveConfig(undefined))
   const definition = createProjectionDefinition(store)
   const { view } = drive(definition, [
@@ -232,7 +321,27 @@ await test('未匹配价目的供应商仍被记录', () => {
   ])
   assert.equal(view.rows.length, 1)
   assert.equal(view.rows[0].provider, 'my-gateway')
-  assert.equal(view.rows[0].tariff, 'peak')
+  // 兜底不能是 `peak`：条目还不存在时两档价格都不存在，把它记成高峰会让
+  // 「高峰用量」凭空变大，而且投影状态持久化后这个标签就冻结了。
+  assert.equal(view.rows[0].tariff, 'flat')
+})
+
+await test('只有统一单价的条目也标为不分峰谷', () => {
+  const store = new PricingStore(resolveConfig({
+    pricing: [{
+      id: 'flat',
+      provider: 'my-gateway',
+      model: 'glm-5',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  }))
+  const definition = createProjectionDefinition(store)
+  const { view } = drive(definition, [
+    headerEvent(0, 'my-gateway', 'glm-5'),
+    assistantEvent(1, 1, 0, { inputTokens: 100, outputTokens: 10 }),
+  ])
+  assert.equal(view.rows[0].tariff, 'flat')
 })
 
 await test('request/context 也能更新路由', () => {

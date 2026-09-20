@@ -15,6 +15,7 @@ import {
   mergePricingLayers,
   normalizeEntry,
   tariffAt,
+  tariffOf,
   tariffStateAt,
   validatePricing,
   validateSchedules,
@@ -328,6 +329,36 @@ test('切换时刻本身已属于新时段', () => {
   assert.equal(state.tariff, 'offPeak')
   assert.equal(state.nextTariff, 'peak')
   assert.equal(hours(state.remainingMs), 2)
+})
+
+//#endregion
+
+//#region 时段归属
+
+test('匹配不到条目或只有统一单价时标为 flat 而不是 peak', () => {
+  // 回归：兜底曾是 `'peak'`，于是「还没配置价格」和「只填了统一单价」这两段用量
+  // 都会被记成高峰，而投影状态持久化后这个标签就冻结了。
+  const split = normalizeEntry(splitEntry())
+  const flat = normalizeEntry(entry())
+  assert.equal(tariffOf(split, MONDAY_PEAK), 'peak')
+  assert.equal(tariffOf(split, SATURDAY), 'offPeak')
+  assert.equal(tariffOf(flat, MONDAY_PEAK), 'flat')
+  assert.equal(tariffOf(null, MONDAY_PEAK), 'flat')
+  assert.equal(tariffOf(undefined, MONDAY_PEAK), 'flat')
+})
+
+test('时间戳不可用时同样标为 flat', () => {
+  const split = normalizeEntry(splitEntry())
+  assert.equal(tariffOf(split, undefined), 'flat')
+  assert.equal(tariffOf(split, Number.NaN), 'flat')
+  assert.equal(tariffOf(split, '2026-09-21'), 'flat')
+})
+
+test('flat 行仍按高峰价块计价，不会变成免费', () => {
+  const flat = normalizeEntry(entry())
+  const cost = costOfEntry(flat, tariffOf(flat, MONDAY_PEAK), { input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 })
+  assert.equal(cost.amount, 2)
+  assert.equal(cost.tariff, 'flat')
 })
 
 //#endregion

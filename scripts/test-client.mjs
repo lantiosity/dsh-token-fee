@@ -250,6 +250,9 @@ const t = (key, params) => {
     'pill.tariffOffPeak': '当前时段：空闲',
     'pill.remaining': '剩余时间：{time}',
     'bucket.input': '缓存未命中',
+    'detail.tariffSplit': '区分峰谷',
+    'detail.flatBadge': '{tokens} 未记录时段',
+    'detail.flatNote': '有 {tokens} tokens 是在峰谷规则生效之前记录的，插件无法判断它们属于哪个时段，现按高峰价计入。改一次价格配置即可让历史重新计算。',
     'bucket.cacheRead': '缓存命中',
     'bucket.cacheWrite': '缓存写入',
     'bucket.output': '输出',
@@ -1391,6 +1394,74 @@ test('两侧的时段判定与倒计时一致', async () => {
       `时刻 ${new Date(at).toISOString()} 两侧结果应一致`,
     )
   }
+})
+
+test('两侧的时段归属兜底一致（都落到 flat）', async () => {
+  // 兜底值决定「还没配置价格」的用量被记成什么，两侧不一致会让浏览器按一套规则
+  // 计价、host 按另一套分桶。
+  const hostPricing = await import('../lib/pricing.js')
+  const split = {
+    id: 'x',
+    provider: 'p',
+    model: 'm',
+    currency: 'CNY',
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] },
+    prices: {
+      peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+      offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+    },
+  }
+  const flat = { ...split, prices: { peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 } } }
+  const peakAt = Date.UTC(2026, 7, 17, 2, 0)
+  for (const entry of [split, flat, null, undefined]) {
+    for (const at of [peakAt, Date.UTC(2026, 7, 15, 2, 0), undefined, Number.NaN]) {
+      assert.equal(
+        clientExports.tariffOf(entry, at),
+        hostPricing.tariffOf(entry, at),
+        `条目 ${entry?.id ?? entry} 在 ${String(at)} 的兜底应一致`,
+      )
+    }
+  }
+  assert.equal(clientExports.tariffOf(split, peakAt), 'peak')
+  assert.equal(clientExports.tariffOf(split, Date.UTC(2026, 7, 15, 2, 0)), 'offPeak')
+  assert.equal(clientExports.tariffOf(flat, peakAt), 'flat')
+  assert.equal(clientExports.tariffOf(null, peakAt), 'flat')
+})
+
+test('computeView 单独统计 flat 行，且只在条目已有峰谷价时提示', () => {
+  const rows = [
+    { provider: 'p', model: 'm', tariff: 'flat', input: 1000, cacheRead: 0, cacheWrite: 0, output: 0 },
+    { provider: 'p', model: 'm', tariff: 'offPeak', input: 1000, cacheRead: 0, cacheWrite: 0, output: 0 },
+  ]
+  const flatEntry = {
+    id: 'f',
+    provider: 'p',
+    model: 'm',
+    currency: 'CNY',
+    schedule: null,
+    prices: { peak: { input: 2, cacheRead: 0, cacheWrite: 0, output: 8 } },
+  }
+  const splitEntry = {
+    ...flatEntry,
+    id: 's',
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] },
+    prices: { ...flatEntry.prices, offPeak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 4 } },
+  }
+  // 统一单价下 flat 是常态，不该报「未记录时段」。
+  assert.equal(clientExports.computeView({ rows }, [flatEntry], 'CNY').flatTokens, 0)
+  const view = clientExports.computeView({ rows }, [splitEntry], 'CNY')
+  assert.equal(view.flatTokens, 1000)
+  assert.equal(view.groups[0].models[0].flatTokens, 1000)
+  // flat 行仍按高峰价块计，不会变成免费。
+  assert.equal(view.amount, 0.003)
+})
+
+test('明细面板把「未记录时段」的用量说出来', () => {
+  const rows = [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'flat', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }]
+  const view = clientExports.computeView({ rows }, [SPLIT_BUILTIN], 'CNY')
+  const html = render(react.createElement(clientExports.FeeDetail, { view, t, pricingError: null, onConfigure: () => {} }))
+  assert.match(html, /tf_badge" data-warn="true">1M 未记录时段</)
+  assert.match(html, /有 1,000,000 tokens 是在峰谷规则生效之前记录的/)
 })
 
 test('两侧对未定价模型的判定一致', async () => {
