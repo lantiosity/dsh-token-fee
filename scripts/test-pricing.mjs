@@ -15,6 +15,7 @@ import {
   mergePricingLayers,
   normalizeEntry,
   tariffAt,
+  tariffStateAt,
   validatePricing,
   validateSchedules,
 } from '../lib/pricing.js'
@@ -211,6 +212,104 @@ test('自定义调度规则生效', () => {
   }), 'e', schedules)
   assert.equal(tariffAt(item, Date.UTC(2026, 7, 17, 3, 0)), 'peak')
   assert.equal(tariffAt(item, Date.UTC(2026, 7, 17, 9, 0)), 'offPeak')
+})
+
+//#endregion
+
+//#region 时段切换倒计时
+
+/** 把毫秒差写成小时数，便于断言。 */
+function hours(ms) {
+  return ms / 3_600_000
+}
+
+test('高峰中段的下一次切换是当天 12:00', () => {
+  // 周一 10:00 CST（= 02:00 UTC），距 12:00 还有 2 小时。
+  const state = tariffStateAt(normalizeEntry(splitEntry()), Date.UTC(2026, 7, 17, 2, 0))
+  assert.equal(state.split, true)
+  assert.equal(state.tariff, 'peak')
+  assert.equal(state.nextTariff, 'offPeak')
+  assert.equal(hours(state.remainingMs), 2)
+})
+
+test('高峰前一小时的下一次切换是窗口起点', () => {
+  // 周一 08:00 CST，一小时后进入高峰。
+  const state = tariffStateAt(normalizeEntry(splitEntry()), Date.UTC(2026, 7, 17, 0, 0))
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  assert.equal(hours(state.remainingMs), 1)
+})
+
+test('周末的空闲一直算到周一开盘', () => {
+  // 周六 10:00 CST 起算，下一次切换是周一 09:00 CST，共 47 小时。
+  const state = tariffStateAt(normalizeEntry(splitEntry()), SATURDAY)
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  assert.equal(hours(state.remainingMs), 47)
+})
+
+test('周五收盘后的空闲跨过整个周末', () => {
+  // 周五 18:00 CST（右开区间，已进入空闲）到周一 09:00 CST 共 63 小时。
+  const state = tariffStateAt(normalizeEntry(splitEntry()), Date.UTC(2026, 7, 21, 10, 0))
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(hours(state.remainingMs), 63)
+})
+
+test('窗口终点前一分钟仍算在高峰内', () => {
+  // 周五 17:59 CST，一分钟后就进入空闲。
+  const state = tariffStateAt(normalizeEntry(splitEntry()), Date.UTC(2026, 7, 21, 9, 59))
+  assert.equal(state.tariff, 'peak')
+  assert.equal(state.nextTariff, 'offPeak')
+  assert.equal(hours(state.remainingMs), 1 / 60)
+})
+
+test('无空闲价的条目没有切换，也不报倒计时', () => {
+  const state = tariffStateAt(normalizeEntry(entry()), SATURDAY)
+  assert.deepEqual(state, { split: false, tariff: 'peak', nextTariff: null, remainingMs: null })
+})
+
+test('夏令时切换当天的墙上时间换算正确', () => {
+  // 纽约 2024-03-10 发生春季调时（EST→EDT）。从周五 15:00 EST 到周一 09:00
+  // EDT 实际是 65 小时而不是 66 小时；按固定偏移推算会多出一小时。
+  const schedules = validateSchedules({
+    nyse: { timezone: 'America/New_York', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00']] },
+  })
+  const item = normalizeEntry(entry({
+    schedule: 'nyse',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', schedules)
+  const friday = tariffStateAt(item, Date.UTC(2024, 2, 8, 20, 0))
+  assert.equal(friday.tariff, 'offPeak')
+  assert.equal(hours(friday.remainingMs), 65)
+  // 调时当天的周日 03:00 EDT 距周一开盘 30 小时。
+  const sunday = tariffStateAt(item, Date.UTC(2024, 2, 10, 7, 0))
+  assert.equal(sunday.tariff, 'offPeak')
+  assert.equal(hours(sunday.remainingMs), 30)
+})
+
+test('稀疏规则也能找到下一周的开盘时刻', () => {
+  // 只在周一 09:00-12:00 计高峰：从周一 12:00 起要等将近 7 天才再次切换。
+  const schedules = validateSchedules({
+    sparse: { timezone: 'UTC', peakDays: [1], peakWindows: [['09:00', '12:00']] },
+  })
+  const item = normalizeEntry(entry({
+    schedule: 'sparse',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', schedules)
+  // 2026-08-17 是周一；12:00 UTC 刚出高峰。
+  const state = tariffStateAt(item, Date.UTC(2026, 7, 17, 12, 0))
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  assert.equal(hours(state.remainingMs), 7 * 24 - 3)
+})
+
+test('切换时刻本身已属于新时段', () => {
+  const item = normalizeEntry(splitEntry())
+  // 12:00:00 整是窗口终点（右开），此刻已进入空闲，下一次切换是 14:00。
+  const state = tariffStateAt(item, Date.UTC(2026, 7, 17, 4, 0))
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  assert.equal(hours(state.remainingMs), 2)
 })
 
 //#endregion

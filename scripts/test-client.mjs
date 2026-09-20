@@ -244,6 +244,11 @@ const t = (key, params) => {
     'pill.aria': '本会话花费 {value}',
     'pill.unpriced': '未配置价格',
     'pill.unpricedShort': '{count} 项未定价',
+    'pill.modeFlat': '计费模式：统一',
+    'pill.modeSplit': '计费模式：峰谷',
+    'pill.tariffPeak': '当前时段：高峰',
+    'pill.tariffOffPeak': '当前时段：空闲',
+    'pill.remaining': '剩余时间：{time}',
     'bucket.input': '缓存未命中',
     'bucket.cacheRead': '缓存命中',
     'bucket.cacheWrite': '缓存写入',
@@ -880,6 +885,149 @@ test('host 与浏览器两侧的费用换算结果一致', async () => {
   const browserModel = browser.groups[0].models[0]
   for (const [bucket, value] of Object.entries(hostByBucket)) {
     assert.equal(browserModel.amounts[bucket], value, `${bucket} 金额必须一致`)
+  }
+})
+
+test('倒计时按 hh:mm:ss 渲染且小时不进位到天', () => {
+  assert.equal(clientExports.formatCountdown(0), '00:00:00')
+  assert.equal(clientExports.formatCountdown(1000), '00:00:01')
+  assert.equal(clientExports.formatCountdown(59_999), '00:01:00')
+  assert.equal(clientExports.formatCountdown(2 * 3_600_000), '02:00:00')
+  // 跨周末的长间隔按总小时数显示，比「2 天 15 小时」更贴近「还剩多久」。
+  assert.equal(clientExports.formatCountdown(63 * 3_600_000), '63:00:00')
+  // 向上取整：最后一秒不能提前显示 00:00:00。
+  assert.equal(clientExports.formatCountdown(1), '00:00:01')
+  assert.equal(clientExports.formatCountdown(-5), '00:00:00')
+})
+
+test('计费模式取自当前路由命中的条目', () => {
+  // 没有价目条目时不给结论：此刻的计费模式无从谈起。
+  assert.equal(clientExports.describeBilling(null, 0), null)
+  assert.equal(clientExports.describeBilling(undefined, 0), null)
+  // 单一单价的条目是「统一」，且不带倒计时。
+  assert.deepEqual(clientExports.describeBilling(FLAT_BUILTIN, 0), {
+    split: false,
+    tariff: 'peak',
+    nextTariff: null,
+    remainingMs: null,
+  })
+  // 区分峰谷的条目给出当前时段与到下一次切换的剩余时间（周一 10:00 CST → 12:00）。
+  const state = clientExports.describeBilling(SPLIT_BUILTIN, Date.UTC(2026, 7, 17, 2, 0))
+  assert.equal(state.split, true)
+  assert.equal(state.tariff, 'peak')
+  assert.equal(state.nextTariff, 'offPeak')
+  assert.equal(state.remainingMs, 2 * 3_600_000)
+})
+
+test('胶囊在统一单价模型上标注「统一」', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    // FILE_ENTRY 只有单一单价，路由也指向它。
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      rows: [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }],
+    }),
+    t,
+    pricing: fakePricing(),
+  }))
+  assert.match(html, /<span class="tf_mode">计费模式：统一<\/span>/)
+  assert.doesNotMatch(html, /tf_tariff/, '统一单价没有时段可显示')
+  assert.doesNotMatch(html, /tf_countdown/)
+})
+
+test('胶囊在峰谷模型上标注「峰谷」并给出当前时段与剩余时间', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      rows: [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }],
+    }),
+    t,
+    pricing: fakePricing({ entries: [SPLIT_BUILTIN] }),
+  }))
+  assert.match(html, /<span class="tf_mode">计费模式：峰谷<\/span>/)
+  // 当前时段与倒计时都跟着真实时钟走，只断言形态。
+  assert.match(html, /<span class="tf_tariff" data-tariff="(peak|offPeak)">当前时段：(高峰|空闲)<\/span>/)
+  assert.match(html, /<span class="tf_countdown">剩余时间：\d{2,}:\d{2}:\d{2}<\/span>/)
+})
+
+test('胶囊的计费模式跟随当前路由而不是会话里的其他模型', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  // 会话里两个模型都出现过：峰谷的 deepseek-flash 与统一的 flat-model。
+  const rows = [
+    { provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+    { provider: 'deepseek-official', model: 'flat-model', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+  ]
+  const entries = [SPLIT_BUILTIN, FLAT_BUILTIN]
+  const flat = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({ route: { provider: 'deepseek-official', model: 'flat-model' }, rows }),
+    t,
+    pricing: fakePricing({ entries }),
+  }))
+  assert.match(flat, /<span class="tf_mode">计费模式：统一<\/span>/)
+  assert.doesNotMatch(flat, /tf_tariff/)
+  const split = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({ route: { provider: 'deepseek-official', model: 'deepseek-flash' }, rows }),
+    t,
+    pricing: fakePricing({ entries }),
+  }))
+  assert.match(split, /<span class="tf_mode">计费模式：峰谷<\/span>/)
+  assert.match(split, /class="tf_tariff"/)
+})
+
+test('当前模型没有价目条目时不标注计费模式', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'my-gateway', model: 'glm-5' },
+      rows: [{ provider: 'my-gateway', model: 'glm-5', tariff: 'peak', input: 500, cacheRead: 0, cacheWrite: 0, output: 500 }],
+    }),
+    t,
+    pricing: fakePricing(),
+  }))
+  assert.doesNotMatch(html, /tf_mode/)
+  assert.doesNotMatch(html, /tf_tariff/)
+  assert.doesNotMatch(html, /tf_countdown/)
+})
+
+test('两侧的时段判定与倒计时一致', async () => {
+  // 与费用换算同理：host 用 tariffAt 给每个用量样本定档，浏览器用同一套规则
+  // 渲染倒计时，两侧不一致会让胶囊指向错误的切换时刻。
+  const hostPricing = await import('../lib/pricing.js')
+  const raw = {
+    id: 'split',
+    provider: 'my-gateway',
+    model: 'glm-5',
+    currency: 'CNY',
+    schedule: {
+      timezone: 'Asia/Shanghai',
+      peakDays: [1, 2, 3, 4, 5],
+      peakWindows: [['09:00', '12:00'], ['14:00', '18:00']],
+    },
+    prices: {
+      peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+      offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+    },
+  }
+  const host = hostPricing.normalizeEntry(raw)
+  // 从周六 00:00 CST 起按小时扫 8 天：调度边界都落在整点，足以覆盖窗口起止、
+  // 周末与跨周。
+  const start = Date.UTC(2026, 7, 14, 16, 0)
+  for (let step = 0; step < 24 * 8; step += 1) {
+    const at = start + step * 3_600_000
+    assert.deepEqual(
+      clientExports.tariffStateAt(raw, at),
+      hostPricing.tariffStateAt(host, at),
+      `时刻 ${new Date(at).toISOString()} 两侧结果应一致`,
+    )
   }
 })
 

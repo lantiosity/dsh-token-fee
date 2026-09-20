@@ -18,7 +18,7 @@ A cost pill appears under the composer, showing the current session's cost in CN
 | 💰 | Live session cost, rounded to the cent, with a configurable display currency |
 | 🧾 | Usage and cost breakdown grouped by provider and model |
 | 🏷️ | **Per-provider pricing**: the same model can carry a completely different unit price under each provider |
-| 🕘 | **Peak/off-peak pricing**: separate peak and off-peak unit prices, with user-defined rules (timezone, peak weekdays, peak windows) |
+| 🕘 | **Peak/off-peak pricing**: separate peak and off-peak unit prices, with user-defined rules (timezone, peak weekdays, peak windows); the pill shows the current period and the time left until the next change |
 | ⚙️ | Pricing editor: a dedicated page in dsh settings, also reachable from the cost panel |
 | 📄 | Pricing table lives at `<DSH_HOME>/token-fee.json`; hand edits apply immediately without a restart |
 | 🌐 | Bilingual UI (Chinese and English) |
@@ -50,6 +50,7 @@ Use only one of the two paths. Afterwards, **restart `dsh web` and hard-refresh 
 ## Usage
 
 - **Cost pill**: sits under the composer, next to the built-in "turns / speed" and "token usage" pills. It shows an amount such as `¥0.12`; when the session still has models without a matching price, it also reports how many are unpriced.
+- **Billing mode**: after the amount, the pill shows how the model in use right now is billed. A single unit price gives `· Billing: flat`; an entry with off-peak prices gives `· Billing: peak/off-peak · Period: peak · Left: 01:22:32`, where the countdown ticks every second down to the next period change. The mode comes from the projection's most recent request route, so it follows a model switch immediately.
 - **Cost breakdown**: opens on click. The total is on top; below it, each provider is a group and each model lists the four billing buckets with token counts and amounts. Entries with peak/off-peak prices are tagged accordingly.
 - **Pricing**: the panel's second tab, or the "Token cost" page in dsh settings.
 
@@ -172,8 +173,9 @@ All figures are CNY per million tokens, sourced from DeepSeek's official pricing
 - **The pricing endpoints accept loopback origins only**: reads and writes require the peer socket to be loopback and the `Host` header to be loopback or `localhost`. Reaching the GUI over a **remote address** such as Tailscale makes the endpoints return 403, the cost panel shows everything as unpriced, and the settings page reports the failure. This is part of the CSRF and DNS-rebinding defense: relaxing it would mean reusing the connection plugin's trust decision, which lives in a client package that a link-installed plugin cannot resolve, and re-implementing it would duplicate security-critical logic. Over a remote address, edit `<DSH_HOME>/token-fee.json` directly.
 - **Chinese public holidays**: the official peak decision excludes public holidays, while this plugin decides by natural weekdays, so holidays are overpriced as peak. For exact billing, adjust the schedule for those days or use a flat price.
 - **Cross-currency**: amounts in different currencies are not converted or merged. The pill and the total count only the display currency; other currencies are reported separately in the breakdown.
-- **Amounts are converted in the browser**: the session projection carries only token buckets, so price edits apply immediately and never invalidate the persisted projection cache. The cost is that host and browser each have their own conversion implementation (the browser side cannot import the host module); a group of assertions in `test-client.mjs` pins the two results together so they cannot drift unnoticed.
-- **Historical attribution**: the tariff a recorded usage belongs to is decided by the event time and frozen into the projection; editing a schedule only affects usage produced afterwards.
+- **Amounts are converted in the browser**: the session projection carries only token buckets, so price edits apply immediately and never invalidate the persisted projection cache. The cost is that host and browser each have their own conversion implementation (the browser side cannot import the host module) — the same holds for the tariff decision and the countdown; several assertions in `test-client.mjs` pin both the cost and the period results together so they cannot drift unnoticed.
+- **Historical attribution**: the tariff a recorded usage belongs to is decided by the event time and frozen into the projection; editing a schedule only affects usage produced afterwards. The pill's "period" is evaluated live against the browser clock, so a rule edit shows up in the current period right away.
+- **The countdown does not roll hours into days**: long gaps such as a weekend render as total hours (`63:00:00`), which answers "how long is left" more directly than "2 days 15 hours".
 - **The config schema is a hand-written Standard Schema**: the contract requires the plugin to export `Config`, and cordis only calls `Config['~standard'].validate` (`vendor/cordis/src/fiber.ts`). This plugin does not `import '@deepseek-ai/schemastery'` because it is installed by link, and Node walks up from the plugin's real path looking for `node_modules` — it cannot reach `$DSH_HOME/profiles/node_modules` (verified: `ERR_MODULE_NOT_FOUND`), so importing that package would make the plugin fail to load. The hand-written validator still reports errors at load time, fills defaults and rejects unknown keys.
 
 ## Development
@@ -186,9 +188,9 @@ npm run test:process  # process-level regression: load into a real dsh web via a
 
 | Suite | Coverage |
 | --- | --- |
-| `scripts/test-pricing.mjs` | Pricing validation, match priority, peak/off-peak decisions, cost conversion |
+| `scripts/test-pricing.mjs` | Pricing validation, match priority, peak/off-peak decisions, period-change countdown, cost conversion |
 | `scripts/test-host.mjs` | `apply` registrations, projection folding (replacement and retry), pricing file reads and writes, endpoint auth and Promise ownership |
-| `scripts/test-client.mjs` | Module factory assembly, `apply` slot registration, real React rendering, and host/browser conversion agreement |
+| `scripts/test-client.mjs` | Module factory assembly, `apply` slot registration, real React rendering (including the pill's billing mode), and host/browser agreement on cost and period decisions |
 | `scripts/test-process.mjs` | Loading into a real `dsh web` via a `--patch` overlay: endpoint contracts, failure paths, and **the process surviving an endpoint error** |
 
 `test-client.mjs` resolves real React from `<DSH_HOME>/profiles/node_modules`, falling back to a stand-in and skipping the rendering cases when it is absent. `test-process.mjs` needs `dsh` on `PATH` and skips entirely (exit code 0) otherwise, so it is safe to run where dsh is not installed.
@@ -197,7 +199,7 @@ Source layout:
 
 | File | Responsibility |
 | --- | --- |
-| `lib/pricing.js` | Pure pricing primitives: built-in table, named schedules, layered merge, entry matching, cost conversion |
+| `lib/pricing.js` | Pure pricing primitives: built-in table, named schedules, layered merge, entry matching, period decision and countdown, cost conversion |
 | `lib/index.js` | Host half: the `tokenFee` session projection and the pricing read/write endpoints |
-| `lib/client.js` | Browser half: cost pill, breakdown panel, pricing editor, settings page |
+| `lib/client.js` | Browser half: cost pill (with billing mode and countdown), breakdown panel, pricing editor, settings page |
 | `cordis.patch.yml` | Bundle-layer patch mounting the host half |
