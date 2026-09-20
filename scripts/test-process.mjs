@@ -19,13 +19,6 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const PORT = await freePort()
-const BASE = `http://127.0.0.1:${PORT}`
-const PRICING = `${BASE}/api/token-fee/pricing`
-const RESET = `${BASE}/api/token-fee/pricing/reset`
-const ACTION_HEADER = 'x-dsh-token-fee-action'
-const START_TIMEOUT_MS = 120_000
-
 /**
  * 取一个当前空闲的端口。
  *
@@ -43,6 +36,22 @@ async function freePort() {
     })
   })
 }
+
+// 分配端口同样按「跳过」处理：禁止绑定监听套接字的受限容器里 createServer/listen
+// 会失败，那与 spawn 失败是同一类环境前提不满足，不该让脚本以未捕获异常退出 1。
+let PORT
+try {
+  PORT = await freePort()
+} catch (error) {
+  console.log(`跳过进程级回归：无法分配本地端口（${error?.message ?? error}）。`)
+  process.exit(0)
+}
+const BASE = `http://127.0.0.1:${PORT}`
+const PRICING = `${BASE}/api/token-fee/pricing`
+const RESET = `${BASE}/api/token-fee/pricing/reset`
+const ACTION_HEADER = 'x-dsh-token-fee-action'
+const START_TIMEOUT_MS = 120_000
+const PROBE_CURRENCY = 'CNY'
 
 let passed = 0
 const failures = []
@@ -105,15 +114,19 @@ async function requestWithHost(path, host) {
 }
 
 // 用 id 定向的 config 覆盖，而不是 insert 一个新条目：插件本就以 bundle 形式装在
-// web profile 里，insert 会让同一个插件跑两份实例（同 key 投影 + 同路径端点）。
-// 覆盖只把它指向临时价目表，用户的 ~/.dsh/token-fee.json 全程不被触碰。
+// web profile 里，insert 会让同一个插件跑两份实例（同 key 投影 + 同路径端点，
+// 而 webServer.register 对重复的 (kind, path) 直接抛错）。
+//
+// patch 的 config 是**整块替换**而非深合并，因此这里把测试依赖的键全部重述，
+// 结果不随用户的 cordis.yml 配置漂移；用户的 ~/.dsh/token-fee.json 全程不被触碰。
 const overlayDir = await mkdtemp(join(tmpdir(), 'token-fee-process-'))
 const overlayPath = join(overlayDir, 'overlay.yml')
 const pricingFile = join(overlayDir, 'token-fee.json')
 await writeFile(overlayPath, [
-  '# 进程级回归用的临时 overlay：把已安装实例的价目表指向临时文件。',
+  '# 进程级回归用的临时 overlay：把已安装实例指向临时价目表与固定展示币种。',
   '- id: token-fee',
   '  config:',
+  `    displayCurrency: ${PROBE_CURRENCY}`,
   `    pricingFile: ${JSON.stringify(pricingFile)}`,
   '',
 ].join('\n'), 'utf8')
@@ -215,6 +228,11 @@ try {
     // 临时 overlay 的 config 覆盖必须生效：写的是临时文件，不是用户的 ~/.dsh。
     if (body.file.path !== pricingFile) {
       throw new Error(`pricingFile 覆盖未生效：期望 ${pricingFile}，得到 ${body.file.path}`)
+    }
+    // patch 的 config 是整块替换，displayCurrency 同样由本脚本重述，因此这里
+    // 断言的是覆盖生效，而不是用户当前配置碰巧等于它。
+    if (body.displayCurrency !== PROBE_CURRENCY) {
+      throw new Error(`displayCurrency 覆盖未生效：期望 ${PROBE_CURRENCY}，得到 ${body.displayCurrency}`)
     }
   })
 
