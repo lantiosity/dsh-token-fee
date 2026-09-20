@@ -421,7 +421,9 @@ test('有已定价用量时渲染精确到分的金额', () => {
     pricing: fakePricing(),
   }))
   assert.match(html, /tf_pill/)
-  assert.match(html, /2\.00/, '一百万未命中输入应按 ¥2 计价')
+  // 金额由 Intl 按运行时 locale 渲染（货币符号位置与小数分隔符都会变），
+  // 因此只断言数值本身。
+  assert.match(html, /2[.,]00/, '一百万未命中输入应按每百万 2 的单价计价')
   assert.doesNotMatch(html, /未配置价格/)
 })
 
@@ -569,7 +571,9 @@ test('内置价目按「四列价格 + 高峰/空闲两行」的表格排版', (
   assert.match(html, /tf_priceTable/)
   assert.match(html, /缓存未命中<\/span><span class="tf_priceHead">缓存命中<\/span><span class="tf_priceHead">缓存写入<\/span><span class="tf_priceHead">输出<\/span>/)
   assert.match(html, /<span class="tf_priceRowLabel">高峰<\/span>(<span class="tf_priceValue">[^<]*<\/span>){4}/)
-  assert.match(html, /<span class="tf_priceRowLabel">空闲<\/span><span class="tf_priceValue">¥1\.00\/M<\/span>/)
+  // 货币符号与小数分隔符都由 Intl 按运行时 locale 决定（zh-CN 为 ¥1.00/M，
+  // en-US 为 CN¥1.00/M，de-DE 为 1,00 CN¥/M），因此只断言数值与 /M 后缀。
+  assert.match(html, /<span class="tf_priceRowLabel">空闲<\/span><span class="tf_priceValue">[^<]*1[.,]00[^<]*\/M<\/span>/)
 })
 
 test('不区分峰谷的条目只渲染一行价格', () => {
@@ -577,7 +581,7 @@ test('不区分峰谷的条目只渲染一行价格', () => {
   clientExports.apply(ctx)
   const section = registrations.find(row => row.options.name === 'settings.section')
   const html = render(react.createElement(section.component, { t, pricing: fakePricing({ builtin: [FLAT_BUILTIN] }) }))
-  assert.match(html, /<span class="tf_priceRowLabel">单价<\/span><span class="tf_priceValue">¥3\.00\/M<\/span>/)
+  assert.match(html, /<span class="tf_priceRowLabel">单价<\/span><span class="tf_priceValue">[^<]*3[.,]00[^<]*\/M<\/span>/)
   assert.doesNotMatch(html, /tf_priceRowLabel">高峰/)
   assert.doesNotMatch(html, /tf_priceRowLabel">空闲/)
 })
@@ -734,8 +738,9 @@ test('币种与峰谷规则都是下拉框，选项带本地化名称', () => {
   const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
   // 峰谷规则的时区下拉始终存在（规则区独立于条目编辑态）。
   assert.match(html, /<option value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)<\/option>/)
-  // 币种下拉只在条目编辑态出现，收敛态不该有可编辑的币种控件。
-  assert.doesNotMatch(html, /<option value="CNY"[^>]*>CNY 人民币<\/option>/)
+  // 币种下拉只在条目编辑态出现，收敛态不该有可编辑的币种控件。按 option 的
+  // value 判断而不是它的本地化名称：后者随运行时 locale 变化。
+  assert.doesNotMatch(html, /<option value="CNY"/)
 })
 
 test('已保存的自定义条目按内置条目的格式呈现', () => {
