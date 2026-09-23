@@ -489,7 +489,7 @@ test('每处半透明菜单底色都配了毛玻璃滤镜', () => {
   // 回归：0.1.7-alpha.1 起 `--dsw-specific-menu` 从不透明变成了半透明，官方契约
   // 是「绘制该底色的高层级表面同时应用 `backdrop-filter:
   // var(--dsw-menu-backdrop-filter)`」。只画底色不加模糊，表面就是一层能看穿
-  // 页面的玻璃——面板如此，吸顶的保存条也如此（内容会从它下面滚过）。
+  // 页面的玻璃。
   //
   // 这里断言的是「所有」绘制该底色的规则，而不是逐个点名：新增一处表面时忘了
   // 配对滤镜，用例就会失败，不必等它被写第二遍。DSH 自己的
@@ -504,7 +504,22 @@ test('每处半透明菜单底色都配了毛玻璃滤镜', () => {
   // 0.1.6-alpha.2 及更早没有这个变量，声明在计算值阶段失效、backdrop-filter 回到
   // none，正是需要的降级（那边底色本就不透明），所以不需要版本判断。
   assert.ok(menus.some(([, selector]) => selector.includes('.tf_panel')), '面板应在其中')
-  assert.ok(menus.some(([, selector]) => selector.includes('.tf_saveBar')), '吸顶保存条应在其中')
+})
+
+test('吸顶控件用不透明表面，不靠毛玻璃遮住滚过去的正文', () => {
+  // 回归：保存条曾照抄面板的 `--dsw-specific-menu` + 毛玻璃。但保存条嵌在**已经有**
+  // `backdrop-filter` 的面板里，嵌套的滤镜不会再去模糊祖先之外的内容，于是半透明
+  // 底色直接透出滚过去的正文。官方对 sticky 控件也是这条规矩：
+  // TerminalBlock.module.css 的「Card surface, not transparent」。
+  const cssText = styleTags[0].textContent
+  const sticky = [...cssText.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(([, , body]) => /position:sticky/.test(body))
+  assert.ok(sticky.length > 0, '应至少有一处吸顶控件')
+  for (const [, selector, body] of sticky) {
+    assert.doesNotMatch(body, /background:var\(--dsw-specific-menu\)/, `${selector.trim()} 是吸顶控件，不得用半透明菜单底色`)
+    assert.match(body, /background:var\(--dsw-alias-bg-layer-\d\)/, `${selector.trim()} 是吸顶控件，需要不透明层级底色`)
+  }
+  assert.ok(sticky.some(([, selector]) => selector.includes('.tf_saveBar')), '保存条应在其中')
 })
 
 test('样式引用的设计 token 都在已核对的白名单里', () => {
@@ -517,6 +532,7 @@ test('样式引用的设计 token 都在已核对的白名单里', () => {
   // 只从 0.1.7-alpha.1 起存在，其余在整个 0.1.5-rc.1 ~ 0.1.7-rc.1 区间都有。
   const allowlist = new Set([
     '--dsw-alias-bg-base',
+    '--dsw-alias-bg-layer-3',
     '--dsw-alias-bg-overlay',
     '--dsw-alias-border-l1',
     '--dsw-alias-border-l2',
