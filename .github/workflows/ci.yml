@@ -52,6 +52,12 @@ jobs:
             'README.md',
             'README.en.md',
             'LICENSE',
+            // README 链接到的文档：缺了就是死链。
+            'docs/README.md',
+            'docs/configuration.md',
+            'docs/internals.md',
+            'docs/dsh-integration.md',
+            'docs/development.md',
           ]
           const missing = required.filter(path => !files.includes(path))
           if (missing.length > 0) {

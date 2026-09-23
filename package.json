@@ -44,6 +44,7 @@
   },
   "files": [
     "lib/",
+    "docs/",
     "cordis.patch.yml",
     "scripts/install.mjs",
     "README.md",
