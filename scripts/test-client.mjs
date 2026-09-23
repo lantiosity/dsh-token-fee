@@ -538,7 +538,6 @@ test('样式引用的设计 token 都在已核对的白名单里', () => {
     '--dsw-alias-border-l2',
     '--dsw-alias-interactive-bg-hover',
     '--dsw-alias-interactive-bg-hover-danger',
-    '--dsw-alias-label-dimmed',
     '--dsw-alias-label-primary',
     '--dsw-alias-label-secondary',
     '--dsw-alias-label-tertiary',
@@ -1471,6 +1470,41 @@ test('胶囊在峰谷模型上标注「峰谷」并给出当前时段与剩余�
   // 当前时段与倒计时都跟着真实时钟走，只断言形态。
   assert.match(html, /<span class="tf_tariff" data-tariff="(peak|offPeak)">当前时段：(高峰|空闲)<\/span>/)
   assert.match(html, /<span class="tf_countdown">剩余时间：\d{2,}:\d{2}:\d{2}<\/span>/)
+})
+
+test('胶囊的分隔符与官方同规格：同处一个 flex 子项、不设字色、不带尾随空格', () => {
+  // 回归：分隔符曾做成 `.tf_pill` 的直接子项，于是 `·` 两侧各多付一次 `gap:6px`，
+  // 同一个点从约 15px 撑到约 27px；内容还写成 `"· "`（多一个尾随空格），而字色
+  // 写成了更淡的 `--dsw-alias-label-dimmed`。
+  //
+  // 官方 StatsPills 把 `·` 放在 `.label` 内部（同一个 flex 子项），且 `.sep` 指向
+  // 未定义的 `--dsw-alias-separator-primary`，声明失效后 color 继承胶囊自身。
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      rows: [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }],
+    }),
+    t,
+    pricing: fakePricing({ entries: [SPLIT_BUILTIN] }),
+  }))
+  // 金额与各段都在同一个 `.tf_text` 里，分隔符夹在中间。
+  const text = /<span class="tf_text">(.*?)<\/span><\/button>/.exec(html)
+  assert.ok(text !== null, '应有 .tf_text 分组')
+  assert.match(text[1], /^<span class="tf_amount">/)
+  assert.match(text[1], /<span class="tf_sep">·<\/span>/, '分隔符应无尾随空格')
+  assert.doesNotMatch(text[1], /· /, '分隔符不得带尾随空格')
+  // 分隔符不得落在 `.tf_text` 之外（那样会再吃一次胶囊的 gap）。
+  const seps = (html.match(/class="tf_sep"/g) ?? []).length
+  assert.equal(seps, 3, '三段计费信息之间应有三个分隔符')
+  assert.equal((text[1].match(/class="tf_sep"/g) ?? []).length, seps, '分隔符必须都在 .tf_text 内')
+  // 不设字色即继承胶囊字色，与官方一致（悬停时点也跟着变亮）。
+  const rule = /\.tf_sep\{([^}]*)\}/.exec(styleTags[0].textContent)
+  assert.ok(rule !== null, '应有 .tf_sep 规则')
+  assert.doesNotMatch(rule[1], /color/, '分隔符不得写死字色')
+  assert.match(rule[1], /margin:0 6px/)
 })
 
 test('胶囊的计费模式跟随当前路由而不是会话里的其他模型', () => {
