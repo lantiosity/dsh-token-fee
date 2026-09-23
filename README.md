@@ -9,7 +9,7 @@
 
 输入框下方会出现一枚费用胶囊：默认以人民币显示当前会话花费，精确到分（四舍五入）。点击后展开面板，按供应商与模型列出**缓存未命中、缓存命中、缓存写入、输出**四类 token 的数量与金额，并可就地编辑价目表。
 
-> 面向 DSH `0.1.6-alpha.2` 开发与验证（`0.1.6-alpha.1` 亦可运行，只是胶囊与统计胶囊上下排列）。
+> 面向 DSH `0.1.7-rc.1` 开发与验证，兼容 `0.1.5-rc.1` 起的所有版本（`0.1.6-alpha.1` 上胶囊与统计胶囊上下排列）。
 
 ## 功能
 
@@ -182,6 +182,9 @@ node scripts/install.mjs --check    # 校验既有安装
 ## 已知限制
 
 - **胶囊与官方统计胶囊同处一行**：0.1.6-alpha.2 起 `conversation.composer.dock` 是一行 flex（`.dock`），slot 的每个 occupant 都是它的直接子项，间距、居中与上边距由 dock 统一负责。本插件因此只把自己的根节点写成与官方 `StatsPills.root` 同规格的收缩节点（不写宽度与内距），绝不改写 InputBar 的布局——把并排改成上下、或反过来，都属于改写承载其他 occupant 的父容器，官方调整结构时会让输入区变形，那是破坏性失败而不只是降级。
+- **半透明菜单表面都跟随官方的毛玻璃材质**：`--dsw-specific-menu` 在 0.1.7-alpha.1 起从不透明的 `var(--dsw-alias-bg-layer-3)` 变成了半透明（深色 0.5 / 浅色 0.58）。官方契约是「绘制该底色的高层级表面**同时**应用 `backdrop-filter: var(--dsw-menu-backdrop-filter)`」（`blur(40px) saturate(150%)`）——只画底色不加模糊，表面就是一层能看穿页面的玻璃。面板与吸顶的保存条（内容会从它下面滚过）都按这条配对。0.1.6-alpha.2 及更早没有这个变量，声明在计算值阶段失效、`backdrop-filter` 回到 `none`，正好是那边需要的降级（底色本就不透明），因此不需要版本判断；`test-client.mjs` 对**所有**绘制该底色的规则断言这组配对。
+- **设计 token 逐个核对过**：插件引用的每个 `--dsw-*` 都在 DSH 的 `ui-theme`/`ui-primitives` 里确认存在。引用不存在的自定义属性会让**整条声明**在计算值阶段失效：曾用的 `--dsw-alias-fill-l1`/`-l2`、`--dsw-alias-separator-primary` 在 DSH 里从未定义，`--dsw-alias-state-warning-primary` 则是 `--dsw-alias-state-warn-primary` 的笔误，结果是选中态底色、徽章底色、分隔符颜色全部静默丢失。`test-client.mjs` 里冻结了这份白名单。
+- **官方图标按名字可用性取用**：`ui-primitives` 的图标命名换过一次口径——0.1.5-rc.1 至 0.1.6-alpha.2 把尺寸写进名字（`IconDatabaseOutline16`），0.1.7-alpha.1 起改成写字重（`IconDatabaseOutlineRegular`/`Medium`）。插件两套名字都试（先取与旧命名观感一致的 `Regular` 档），都取不到时降级为不画图标。**缺图标不能连累胶囊**：把 `undefined` 当组件交给 React 会抛「Element type is invalid」，那会炸掉整个 occupant，整枚胶囊连同面板一起消失——而实际缺的只是一个装饰性图标。这条是按可用性回退而不是按版本分支，因为插件在浏览器侧拿不到 DSH 版本号。
 - **价目表端点只接受回环来源**：读写端点要求 peer socket 是回环且 `Host` 头是回环或 `localhost`。经 Tailscale 等**远程地址**访问 GUI 时端点返回 403，费用面板会显示「未配置价格」并在设置页给出失败原因。这是 CSRF 与 DNS-rebinding 防线的一部分：放宽判据需要复用 connection 插件的信任判定，而该判定位于客户端包内，link 安装的插件解析不到它，重写一份又会重复安全关键逻辑。经远程地址使用时，请直接编辑 `<DSH_HOME>/token-fee.json`。
 - **中国法定节假日**：官方的高峰判定不含法定节假日，本插件按自然工作日判定，因此法定节假日会被高估为高峰价。需要精确计费时，请为节假日单独调整规则或改用固定单价。
 - **跨币种**：不同币种的金额不会换算合并。胶囊与合计只统计展示币种，其他币种在明细中单独提示。

@@ -109,41 +109,72 @@ const stubJsxRuntime = {
   jsxs: (type, props) => ({ type, props }),
 }
 
+/**
+ * 官方图标的替身。
+ *
+ * 每个替身把自己渲染成带 `data-icon` 的 svg，用例据此断言实际取到的是哪一个
+ * 导出名。图标命名换过一次口径：0.1.5-rc.1 至 0.1.6-alpha.2 把尺寸写进名字，
+ * 0.1.7-rc.1 改成写字重，因此两套名字都要能渲染。
+ * @param name - 写进 `data-icon` 的标记。
+ * @returns 一个图标组件替身。
+ */
+function iconStub(name) {
+  return () => react.createElement('svg', { 'data-icon': name })
+}
+
+/** 0.1.5-rc.1 ~ 0.1.6-alpha.2 形状的图标导出。 */
+const LEGACY_ICONS = {
+  IconDatabaseOutline16: iconStub('database-16'),
+  IconChevronDownOutline14: iconStub('chevron-14'),
+}
+
+/** 0.1.7-rc.1 形状的图标导出。 */
+const WEIGHTED_ICONS = {
+  IconDatabaseOutlineRegular: iconStub('database-regular'),
+  IconDatabaseOutlineMedium: iconStub('database-medium'),
+  IconChevronDownOutlineRegular: iconStub('chevron-regular'),
+  IconChevronDownOutlineMedium: iconStub('chevron-medium'),
+}
+
+/** 默认的官方 primitives 替身（旧命名，即 0.1.5-rc.1 / 0.1.6-alpha.2 的形状）。 */
+function stubPrimitives(icons = LEGACY_ICONS) {
+  return {
+    ...icons,
+    // 官方按钮：把 variant/size 落到 data 属性上，便于断言用的是哪一种样式。
+    Button: ({ variant = 'ghost', size = 'md', children, ...rest }) => react.createElement(
+      'button',
+      { type: 'button', 'data-variant': variant, 'data-size': size, ...rest },
+      children,
+    ),
+    // 组合框的下拉列表：展开时把候选渲染成列表，收起时只渲染 anchor。
+    // 用 createElement 而不是裸对象，否则 React 会把它当成非法子节点。
+    Menu: ({ open, anchor, items, onSelect }) => react.createElement(
+      'span',
+      null,
+      anchor,
+      open
+        ? react.createElement(
+          'ul',
+          { className: 'tf_menuListStub' },
+          items.map(item => react.createElement(
+            'li',
+            { key: item.id, 'data-id': item.id, onClick: () => onSelect(item.id) },
+            item.type === 'label' ? item.text : item.id,
+          )),
+        )
+        : null,
+    ),
+  }
+}
+
 /** 模块工厂收到的 require 实现。 */
-function makeRequire() {
+function makeRequire(options = {}) {
   return id => {
     if (id === 'react') return hasRealReact ? react : stubReact
     if (id === 'react/jsx-runtime') return hasRealReact ? jsxRuntime : stubJsxRuntime
     if (id === 'react-dom') return { createPortal: node => node }
     if (id === '@deepseek-ai/dsh-client-ui-primitives') {
-      return {
-        IconDatabaseOutline16: () => null,
-        IconChevronDownOutline14: () => null,
-        // 官方按钮：把 variant/size 落到 data 属性上，便于断言用的是哪一种样式。
-        Button: ({ variant = 'ghost', size = 'md', children, ...rest }) => react.createElement(
-          'button',
-          { type: 'button', 'data-variant': variant, 'data-size': size, ...rest },
-          children,
-        ),
-        // 组合框的下拉列表：展开时把候选渲染成列表，收起时只渲染 anchor。
-        // 用 createElement 而不是裸对象，否则 React 会把它当成非法子节点。
-        Menu: ({ open, anchor, items, onSelect }) => react.createElement(
-          'span',
-          null,
-          anchor,
-          open
-            ? react.createElement(
-              'ul',
-              { className: 'tf_menuListStub' },
-              items.map(item => react.createElement(
-                'li',
-                { key: item.id, 'data-id': item.id, onClick: () => onSelect(item.id) },
-                item.type === 'label' ? item.text : item.id,
-              )),
-            )
-            : null,
-        ),
-      }
+      return stubPrimitives(options.icons)
     }
     throw new Error(`未预期的模块请求：${id}`)
   }
@@ -454,6 +485,62 @@ test('胶囊根节点交给 composer dock 排布，不独占整行', () => {
   assert.match(rule[1], /--dsh-content-font-size-secondary/)
 })
 
+test('每处半透明菜单底色都配了毛玻璃滤镜', () => {
+  // 回归：0.1.7-alpha.1 起 `--dsw-specific-menu` 从不透明变成了半透明，官方契约
+  // 是「绘制该底色的高层级表面同时应用 `backdrop-filter:
+  // var(--dsw-menu-backdrop-filter)`」。只画底色不加模糊，表面就是一层能看穿
+  // 页面的玻璃——面板如此，吸顶的保存条也如此（内容会从它下面滚过）。
+  //
+  // 这里断言的是「所有」绘制该底色的规则，而不是逐个点名：新增一处表面时忘了
+  // 配对滤镜，用例就会失败，不必等它被写第二遍。DSH 自己的
+  // elevation-styles 用例用的也是这条判据。
+  const cssText = styleTags[0].textContent
+  const menus = [...cssText.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(([, , body]) => /background:var\(--dsw-specific-menu\)/.test(body))
+  assert.ok(menus.length > 0, '应至少有一处绘制菜单底色')
+  for (const [, selector, body] of menus) {
+    assert.match(body, /backdrop-filter:var\(--dsw-menu-backdrop-filter\)/, `${selector.trim()} 画了菜单底色却没配毛玻璃滤镜`)
+  }
+  // 0.1.6-alpha.2 及更早没有这个变量，声明在计算值阶段失效、backdrop-filter 回到
+  // none，正是需要的降级（那边底色本就不透明），所以不需要版本判断。
+  assert.ok(menus.some(([, selector]) => selector.includes('.tf_panel')), '面板应在其中')
+  assert.ok(menus.some(([, selector]) => selector.includes('.tf_saveBar')), '吸顶保存条应在其中')
+})
+
+test('样式引用的设计 token 都在已核对的白名单里', () => {
+  // 回归：曾引用 `--dsw-alias-fill-l1`/`-l2`、`--dsw-alias-separator-primary` 与
+  // `--dsw-alias-state-warning-primary`。前三个 DSH 从未定义过，第四个是
+  // `--dsw-alias-state-warn-primary` 的笔误——引用不存在的自定义属性会让整条声明
+  // 在计算值阶段失效，选中态底色、徽章底色、分隔符颜色全部静默丢失。
+  //
+  // 白名单是逐个对着 DSH 的 ui-theme 与 ui-primitives 核对过的；`--dsw-menu-backdrop-filter`
+  // 只从 0.1.7-alpha.1 起存在，其余在整个 0.1.5-rc.1 ~ 0.1.7-rc.1 区间都有。
+  const allowlist = new Set([
+    '--dsw-alias-bg-base',
+    '--dsw-alias-bg-overlay',
+    '--dsw-alias-border-l1',
+    '--dsw-alias-border-l2',
+    '--dsw-alias-interactive-bg-hover',
+    '--dsw-alias-interactive-bg-hover-danger',
+    '--dsw-alias-label-dimmed',
+    '--dsw-alias-label-primary',
+    '--dsw-alias-label-secondary',
+    '--dsw-alias-label-tertiary',
+    '--dsw-alias-state-error-primary',
+    '--dsw-alias-state-warn-primary',
+    '--dsw-elevation-prominent',
+    '--dsw-elevation-stroke-color',
+    '--dsw-menu-backdrop-filter',
+    '--dsw-specific-menu',
+  ])
+  const used = new Set(Array.from(styleTags[0].textContent.matchAll(/--dsw-[a-z0-9-]+/g), match => match[0]))
+  assert.deepEqual([...used].filter(token => !allowlist.has(token)).sort(), [], '出现了未核对的设计 token')
+  // 反向也要盯：白名单里被写错的 token 永远不该再出现。
+  for (const typo of ['--dsw-alias-fill-l1', '--dsw-alias-fill-l2', '--dsw-alias-separator-primary', '--dsw-alias-state-warning-primary']) {
+    assert.ok(!used.has(typo), `${typo} 在 DSH 里不存在`)
+  }
+})
+
 test('apply 注册费用胶囊与设置页', () => {
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
@@ -506,6 +593,56 @@ test('有已定价用量时渲染精确到分的金额', () => {
   // 因此只断言数值本身。
   assert.match(html, /2[.,]00/, '一百万未命中输入应按每百万 2 的单价计价')
   assert.doesNotMatch(html, /未配置价格/)
+})
+
+/**
+ * 用指定的官方图标导出渲染一枚有已定价用量的胶囊。
+ * @param icons - 充当官方图标导出的对象。
+ * @returns 静态 HTML。
+ */
+function renderPillWith(icons) {
+  const exports = loaded.factory(makeRequire({ icons }))
+  const { ctx, registrations } = fakeClientContext()
+  exports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  return render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      rows: [{
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+        tariff: 'peak',
+        input: 1_000_000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        output: 0,
+      }],
+    }),
+    t,
+    pricing: fakePricing(),
+  }))
+}
+
+test('0.1.5-rc.1 / 0.1.6-alpha.2 的图标命名仍能渲染', () => {
+  const html = renderPillWith(LEGACY_ICONS)
+  assert.match(html, /data-icon="database-16"/)
+})
+
+test('0.1.7-rc.1 的字重图标命名也能渲染', () => {
+  // 回归：0.1.7-rc.1 把 `IconDatabaseOutline16` 换成了
+  // `IconDatabaseOutlineRegular`/`Medium`。解构出的 `undefined` 被当成组件交给
+  // React 会抛「Element type is invalid」，整枚胶囊连同面板一起消失——而缺的
+  // 只是一个装饰性图标。
+  const html = renderPillWith(WEIGHTED_ICONS)
+  assert.match(html, /data-icon="database-regular"/, '应优先取与旧命名观感一致的 Regular 档')
+  assert.match(html, /tf_pill/)
+})
+
+test('图标导出都取不到时降级为不画图标，胶囊本身照常渲染', () => {
+  const html = renderPillWith({})
+  assert.doesNotMatch(html, /<svg/, '没有可用图标时不应画图标')
+  assert.match(html, /tf_pill/, '缺图标不应连累胶囊')
+  assert.match(html, /2[.,]00/, '金额仍应渲染')
 })
 
 test('未配置价格的供应商渲染未定价提示', () => {
