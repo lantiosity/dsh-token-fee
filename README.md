@@ -25,9 +25,30 @@
 
 ## 安装
 
-标准安装路径（需要 `pnpm`）：
+三条路径任选其一。装完都**重启 `dsh web`，再硬刷新浏览器**。
+
+### 插件管理器（DSH `0.1.6-alpha.2` 起）
+
+侧栏 → **插件** → **添加插件**，在「包名或地址」里填下面任一种：
+
+| 形式 | 填什么 |
+| --- | --- |
+| npm 包名 | `@lantiosity/dsh-token-fee` |
+| GitHub 简写 | `github:lantiosity/dsh-token-fee` |
+| 仓库地址 | `https://github.com/lantiosity/dsh-token-fee` |
+| 本地检出 | 本仓库目录的绝对路径 |
+
+点**安装**：Host 会先读出这个 spec 指向什么，确认是带 `dsh.bundle.patch` 的插件后才开始装；装完点**立即启用**，插件即被启用，列表也会滚动到它。
+
+- 安装源默认是 pnpm 自身的注册表，中国大陆可切到 npmmirror。**包名**走的就是所选注册表，镜像可用；**仓库地址**则不然——镜像只提供注册表里的包与依赖，不代理 GitHub 仓库本身，所以那条路走的仍是 GitHub 直连，GitHub 不通时换镜像没有帮助。
+- 安装成功不代表模块一定能激活。若重启后没有出现费用胶囊，请看 dsh 的启动日志。
+
+### 命令行
 
 ```bash
+# 从 npm 安装
+dsh plugin --profile web add "@lantiosity/dsh-token-fee"
+
 # 从 GitHub 安装
 dsh plugin --profile web add "github:lantiosity/dsh-token-fee"
 
@@ -35,9 +56,9 @@ dsh plugin --profile web add "github:lantiosity/dsh-token-fee"
 dsh plugin --profile web add "/path/to/dsh-token-fee"
 ```
 
-本包声明了 `dsh.bundle.patch`，dsh 会把它并入 profile 的 bundle 层，因此**不需要**手工编辑 profile 的 `cordis.patch.yml`。
+### 备选安装器
 
-无法使用 `dsh plugin` 时，可用备选安装器：
+无法使用 `dsh plugin` 时：
 
 ```bash
 node scripts/install.mjs            # 复制文件并幂等写入 profile patch
@@ -45,7 +66,7 @@ node scripts/install.mjs --dry-run  # 只打印将写入的路径
 node scripts/install.mjs --check    # 校验既有安装
 ```
 
-两条路径只需其一。安装后**重启 `dsh web`，再硬刷新浏览器**。
+三条路径都会把 host 半并入 profile 的 bundle 层——本包声明了 `dsh.bundle.patch`，因此**不需要**手工编辑 profile 的 `cordis.patch.yml`。
 
 ## 使用
 

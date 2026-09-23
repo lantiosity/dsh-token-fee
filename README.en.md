@@ -25,9 +25,30 @@ A cost pill appears under the composer: it shows the current session's spend in 
 
 ## Install
 
-The standard path (requires `pnpm`):
+Pick any one of the three. Afterwards **restart `dsh web`, then hard-refresh the browser**.
+
+### Plugin manager (DSH `0.1.6-alpha.2` onwards)
+
+Sidebar → **Plugins** → **Add plugin**, and put any of these in "Package or address":
+
+| Form | What to enter |
+| --- | --- |
+| npm package name | `@lantiosity/dsh-token-fee` |
+| GitHub shorthand | `github:lantiosity/dsh-token-fee` |
+| Repository URL | `https://github.com/lantiosity/dsh-token-fee` |
+| Local checkout | The absolute path to this repository |
+
+Click **Install**: the Host first reads what the spec names and only then installs, once it confirms a plugin carrying `dsh.bundle.patch`. When it finishes, **Enable now** switches the plugin on and scrolls the list to it.
+
+- The registry defaults to pnpm's own; mainland China can switch to npmmirror. A **package name** is resolved through whichever registry is selected, so a mirror works there; a **repository URL** is not — a mirror only supplies registry packages and their dependencies, not the GitHub repository itself, so that path still goes straight to GitHub and switching mirrors does not help when GitHub is unreachable.
+- A successful installation does not certify that the module can activate. If no cost pill appears after the restart, check dsh's startup log.
+
+### Command line
 
 ```bash
+# From npm
+dsh plugin --profile web add "@lantiosity/dsh-token-fee"
+
 # From GitHub
 dsh plugin --profile web add "github:lantiosity/dsh-token-fee"
 
@@ -35,9 +56,9 @@ dsh plugin --profile web add "github:lantiosity/dsh-token-fee"
 dsh plugin --profile web add "/path/to/dsh-token-fee"
 ```
 
-This package declares `dsh.bundle.patch`, so dsh merges it into the profile's bundle layer and you do **not** need to edit the profile's `cordis.patch.yml` by hand.
+### Fallback installer
 
-When `dsh plugin` is unavailable, there is a fallback installer:
+When `dsh plugin` is unavailable:
 
 ```bash
 node scripts/install.mjs            # copy files and idempotently write the profile patch
@@ -45,7 +66,7 @@ node scripts/install.mjs --dry-run  # print the paths that would be written
 node scripts/install.mjs --check    # verify an existing installation
 ```
 
-Only one of the two paths is needed. Afterwards **restart `dsh web`, then hard-refresh the browser**.
+All three paths merge the host half into the profile's bundle layer — this package declares `dsh.bundle.patch`, so you do **not** need to edit the profile's `cordis.patch.yml` by hand.
 
 ## Usage
 
