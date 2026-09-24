@@ -531,11 +531,11 @@ test('样式引用的设计 token 都在已核对的白名单里', () => {
   // 白名单是逐个对着 DSH 的 ui-theme 与 ui-primitives 核对过的；`--dsw-menu-backdrop-filter`
   // 只从 0.1.7-alpha.1 起存在，其余在整个 0.1.5-rc.1 ~ 0.1.7-rc.1 区间都有。
   const allowlist = new Set([
-    '--dsw-alias-bg-base',
     '--dsw-alias-bg-layer-3',
-    '--dsw-alias-bg-overlay',
     '--dsw-alias-border-l1',
     '--dsw-alias-border-l2',
+    '--dsw-alias-border-l4',
+    '--dsw-alias-brand-primary',
     '--dsw-alias-interactive-bg-hover',
     '--dsw-alias-interactive-bg-hover-danger',
     '--dsw-alias-label-primary',
@@ -554,6 +554,35 @@ test('样式引用的设计 token 都在已核对的白名单里', () => {
   for (const typo of ['--dsw-alias-fill-l1', '--dsw-alias-fill-l2', '--dsw-alias-separator-primary', '--dsw-alias-state-warning-primary']) {
     assert.ok(!used.has(typo), `${typo} 在 DSH 里不存在`)
   }
+})
+
+test('表单控件沿用官方 ConfigField 的配方', () => {
+  // 回归：面板里的输入框与下拉框曾是 1px border-l2 + 7px 圆角 + bg-overlay，
+  // 聚焦只把描边从 l2 换成 l1——比 DSH 其余控件重，对焦时又几乎没有反应。
+  // 官方的 `ConfigField.module.css` 与 `settings-form/fields.module.css` 一致给出：
+  // 0.5px 发丝描边（border-l4）、8px 圆角、层级底色、对焦换品牌色、非法值换错误色。
+  const cssText = styleTags[0].textContent
+  /** 取出某条规则的声明体；选择器逐字匹配，因此逗号列表也照写。 */
+  const ruleBody = (selector) => {
+    const at = cssText.indexOf(`${selector}{`)
+    if (at < 0) return null
+    return cssText.slice(at + selector.length + 1, cssText.indexOf('}', at))
+  }
+
+  for (const selector of ['.tf_input,.tf_select', '.tf_combo', '.tf_clock', '.tf_ruleName', '.tf_day']) {
+    const body = ruleBody(selector)
+    assert.ok(body !== null, `应有 ${selector} 规则`)
+    assert.match(body, /border:0\.5px solid var\(--dsw-alias-border-l4\)/, `${selector} 应用 0.5px 发丝描边`)
+    assert.match(body, /border-radius:8px/, `${selector} 应用 8px 圆角`)
+  }
+  for (const selector of ['.tf_input:focus,.tf_select:focus', '.tf_combo:focus-within', '.tf_clock:focus', '.tf_ruleName:focus']) {
+    const body = ruleBody(selector)
+    assert.ok(body !== null, `应有 ${selector} 规则`)
+    assert.match(body, /border-color:var\(--dsw-alias-brand-primary\)/, `${selector} 对焦时应换成品牌色描边`)
+  }
+  // 非法值走官方属性，不再自造 data 属性。
+  assert.match(cssText, /\[aria-invalid='true'\]/)
+  assert.doesNotMatch(cssText, /\[data-invalid\]/)
 })
 
 test('apply 注册费用胶囊与设置页', () => {
@@ -1239,7 +1268,8 @@ test('时段行渲染四个窄框，倒序时就地标红', () => {
     schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['12:05', '09:07']] },
   })
   assert.match(broken, /class="tf_windowHint">结束需晚于开始</)
-  assert.equal(broken.split('data-invalid="true"').length - 1, 4, '整行四个框都标红')
+  // 非法值走官方的 `aria-invalid`，与 ConfigField / settings-form 同一着色约定。
+  assert.equal(broken.split('aria-invalid="true"').length - 1, 4, '整行四个框都标红')
 })
 
 test('规则表单可以改名，并有与条目一致的「完成」键', () => {

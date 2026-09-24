@@ -39,6 +39,20 @@
 
 **吸顶控件用不透明底色**：价格设置页的保存条 `position:sticky` 常驻顶部、正文从它下面滚过，因此用不透明的 `--dsw-alias-bg-layer-3`（正是 0.1.7-alpha.1 之前 `--dsw-specific-menu` 的值，分主题）。这里不能照抄面板的毛玻璃：保存条嵌在**已经有** `backdrop-filter` 的面板里，嵌套的滤镜不会再去模糊祖先之外的内容，半透明底色会直接透出滚过去的正文。官方对 sticky 控件也是这条规矩（`TerminalBlock.module.css`：「Card surface, not transparent」）。
 
+## 表单控件
+
+面板与设置页里的输入框、下拉框、组合框、时钟框、规则名输入框、星期按钮统一用官方 `ConfigField.module.css` 与 `settings-form/fields.module.css` 的配方：
+
+```css
+border: 0.5px solid var(--dsw-alias-border-l4);
+border-radius: 8px;
+background: var(--dsw-alias-bg-layer-3);
+```
+
+对焦换成品牌色描边（`--dsw-alias-brand-primary`，组合框用 `:focus-within`），非法值用官方的 `aria-invalid='true'` 换成 `--dsw-alias-state-error-primary`。高度取官方紧凑档 28px（`Button.module.css` 的 `.sm`），与按钮同高。
+
+此前是 `1px solid var(--dsw-alias-border-l2)` + 7px 圆角 + `bg-overlay`，对焦只把描边从 l2 换成 l1——那是一圈「稍深一点的灰边」，比 DSH 其余控件重，对焦时又几乎没反应。`test-client.mjs` 把这条配方钉住了。
+
 ## 设计 token
 
 插件引用的每个 `--dsw-*` 都在 DSH 的 `ui-theme`/`ui-primitives` 里确认存在。引用不存在的自定义属性会让**整条声明**在计算值阶段失效：曾用的 `--dsw-alias-fill-l1`/`-l2`、`--dsw-alias-separator-primary` 在 DSH 里从未定义，`--dsw-alias-state-warning-primary` 则是 `--dsw-alias-state-warn-primary` 的笔误，结果是选中态底色、徽章底色、分隔符颜色全部静默丢失。
@@ -93,6 +107,20 @@ The check covered the eight tags from `dsh-v0.1.5-rc.1` to `dsh-v0.1.7-rc.1` (`0
 **Translucent menu surfaces follow the built-in frosted-glass material**: from 0.1.7-alpha.1 `--dsw-specific-menu` changed from the opaque `var(--dsw-alias-bg-layer-3)` to a translucent colour (0.5 dark / 0.58 light). The built-in contract is that an elevated surface painting that fill **also** applies `backdrop-filter: var(--dsw-menu-backdrop-filter)` (`blur(40px) saturate(150%)`, see `ui-theme/README` and `Menu.module.css`) — painting the fill alone leaves a pane you can see the page through. The popup panel follows that pairing. 0.1.6-alpha.2 and earlier have no such variable, so the declaration is invalid at computed-value time and `backdrop-filter` falls back to `none`, which is exactly the degradation needed there (the fill is opaque); no version branch is required.
 
 **Sticky controls use an opaque fill**: the pricing page's save bar is `position:sticky` at the top with content scrolling beneath it, so it uses the opaque `--dsw-alias-bg-layer-3` (exactly what `--dsw-specific-menu` was before 0.1.7-alpha.1, and palette-aware). It cannot copy the panel's frosted glass: the bar sits **inside** a panel that already has a `backdrop-filter`, and a nested filter does not reach beyond its ancestor, so a translucent fill would simply show the scrolling text through. The built-in rule for sticky controls is the same (`TerminalBlock.module.css`: "Card surface, not transparent").
+
+## Form controls
+
+The panel's and the settings page's inputs, selects, comboboxes, clock fields, rule-name fields and weekday buttons all use the recipe from the built-in `ConfigField.module.css` and `settings-form/fields.module.css`:
+
+```css
+border: 0.5px solid var(--dsw-alias-border-l4);
+border-radius: 8px;
+background: var(--dsw-alias-bg-layer-3);
+```
+
+Focus switches to a brand-coloured stroke (`--dsw-alias-brand-primary`; the combobox uses `:focus-within`), and invalid values use the built-in `aria-invalid='true'` to switch to `--dsw-alias-state-error-primary`. The height is the built-in compact step, 28px (`Button.module.css`'s `.sm`), so controls and buttons line up.
+
+They used to be `1px solid var(--dsw-alias-border-l2)` with a 7px radius on `bg-overlay`, focusing by moving the stroke from l2 to l1 — a slightly darker grey ring, heavier than the rest of DSH and with almost no visible focus response. `test-client.mjs` pins the recipe.
 
 ## Design tokens
 
