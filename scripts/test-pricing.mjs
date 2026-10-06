@@ -293,7 +293,16 @@ test('内置 deepseek 调度真的挂上了 cn 集合', () => {
   assert.deepEqual(normalizeEntry(splitEntry()).schedule.holidays, [])
 })
 
-test('调休上班的周末按 workdays 判为 peak', () => {
+test('按官方口径，调休上班的周末仍是空闲', () => {
+  // 官方只把「法定节假日」排除出高峰：调休上班的周末**没有**因此变成高峰日。
+  // 内置 deepseek 规则不挂 workdays，这类日期就按自己所在的星期落进空闲。
+  const item = normalizeEntry(splitEntry(), 'pricing entry', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  assert.deepEqual([...item.schedule.workdays], [], '内置规则不应挂 workdays')
+  // 2026-02-14 是春节前的调休上班日（周六）：官方按空闲计，不是高峰。
+  assert.equal(tariffAt(item, WORKDAY_SATURDAY_PEAK), 'offPeak')
+})
+
+test('workdays 是给「提供方把调休算高峰」留的开关', () => {
   const inline = {
     timezone: 'Asia/Shanghai',
     peakDays: [1, 2, 3, 4, 5],
@@ -304,7 +313,8 @@ test('调休上班的周末按 workdays 判为 peak', () => {
     schedule: inline,
     prices: { peak: { input: 2, cacheRead: 0.04, output: 8 }, offPeak: { input: 1, cacheRead: 0.02, output: 4 } },
   }), 'pricing entry', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
-  // 2026-02-14 是周六，普通周六是空闲；挂上 workdays 后它变成高峰日。
+  // 2026-02-14 是周六，普通周六是空闲；显式挂上 workdays 后才变成高峰日。
+  // 这不是 DeepSeek 官方口径，只为确实这么计费的提供方保留。
   assert.equal(tariffAt(item, WORKDAY_SATURDAY_PEAK), 'peak')
   // 普通周六仍然空闲。
   assert.equal(tariffAt(item, SATURDAY), 'offPeak')

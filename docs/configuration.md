@@ -160,9 +160,9 @@
 
 数据取自国务院办公厅的年度放假安排通知，**需要逐年更新**：新年度的通知通常在上一年的 11 月发布，文件里没有的年份会退回「按自然工作日判定」。引用一个不存在的集合名会在装载期报错——那是配置错误，不是缺数据。
 
-`deepseek` 这条内置规则引用 `cn` 的 `holidays`，但**没有**引用它的 `workdays`：官方的口径只到「法定节假日除外」，没有提调休上班的周末。要让调休周末按高峰计，自己加一条规则（或覆盖内置规则）把 `workdays` 也挂上 `cn` 即可。
+官方口径是「法定节假日除外」，**连调休上班的周末也按空闲计**。因此内置 `deepseek` 规则只引用 `cn` 的 `holidays`、**不**引用 `workdays`——按官方价计费时不要给 `deepseek` 挂 `workdays`。`workdays` 是给「你的提供方确实把调休周末算高峰」这种场景留的通用开关，对官方计费不要用。
 
-插件内置一条名为 `deepseek` 的规则（北京时间周一至周五 09:00–12:00、14:00–18:00，法定节假日除外）。你可以在用户文件的 `schedules` 中定义同名规则来覆盖它，或新建自己的规则供条目引用。
+插件内置一条名为 `deepseek` 的规则（北京时间周一至周五 09:00–12:00、14:00–18:00，法定节假日除外，调休上班的周末也按空闲计）。你可以在用户文件的 `schedules` 中定义同名规则来覆盖它，或新建自己的规则供条目引用。
 
 在界面上直接改这条内置规则即可：内置价目条目引用的是**规则名** `deepseek` 而不是内联的一份规则副本，因此你的覆盖会同时作用到内置条目上——官方调整高峰时段时，改一处就够了。内置规则卡片没有删除键（它总能被覆盖），自定义规则卡片有。
 
@@ -324,8 +324,8 @@ A set name points at the packaged [`data/cn-holidays.json`](../data/cn-holidays.
 
 The dates come from the State Council's annual holiday notice and **need updating every year**: a new year's notice usually lands in the previous November, and a year with no data falls back to the natural-weekday decision. Referencing a set that does not exist fails at load time — that is a configuration error, not missing data.
 
-The built-in `deepseek` schedule references `cn`'s `holidays` but **not** its `workdays`: the official wording stops at "public holidays excluded" and says nothing about make-up workdays on weekends. To count those as peak, add your own rule (or override the built-in one) with `workdays: "cn"` as well.
+The built-in `deepseek` schedule references `cn`'s `holidays` but **not** its `workdays`: the official rule is "public holidays excluded", and **make-up workdays on weekends are priced as off-peak too**. To match the official rate, do not attach `workdays` to `deepseek`. `workdays` is a general switch for providers that do charge peak on make-up weekends; do not use it for the official rate.
 
-The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00, public holidays excluded). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference.
+The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00, public holidays excluded, and make-up workdays on weekends priced as off-peak). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference.
 
 You can also edit that built-in rule directly in the UI: the built-in pricing entries reference the schedule **name** `deepseek` rather than an inlined copy of the rule, so your override applies to the built-in entries too — when the official peak windows change, one edit is enough. The built-in rule card has no delete button (it can always be overridden); custom rule cards do.

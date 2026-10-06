@@ -9,7 +9,7 @@ Live **per-session cost** for the [DeepSeek Harness](https://github.com/deepseek
 
 A cost pill appears under the composer: it shows the current session's spend in CNY by default, rounded to the cent. Clicking it opens a panel that lists, per provider and model, the token counts and amounts for **cache misses, cache hits, cache writes and output**, and lets you edit the pricing table in place.
 
-> Built and verified against DSH `0.1.7-rc.1`, compatible with every release from `0.1.5-rc.1` onwards (on `0.1.6-alpha.1` the pill and the stats pills stack instead of sharing a row). The compatibility check is in [`docs/dsh-integration.md`](docs/dsh-integration.md).
+> Built and verified against DSH `0.1.7-rc.1`, compatible with every release from `0.1.5-rc.1` onwards, with the contract check extended through **`0.2.0-rc.2`** (`0.1.7-rc.2`, `0.2.0-rc.1` and `0.2.0-rc.2` audited one by one; no new version boundary appeared). On `0.1.6-alpha.1` the pill and the stats pills stack instead of sharing a row. The compatibility check is in [`docs/dsh-integration.md`](docs/dsh-integration.md).
 
 ## Features
 
@@ -163,11 +163,13 @@ A `schedule` describes the peak window:
 | `peakDays` | Peak weekdays, `0` being Sunday. |
 | `peakWindows` | Peak windows, half-open `["HH:MM", "HH:MM"]` intervals. |
 | `holidays` | A holiday set name or date array; those dates are **not peak**, even on a peak weekday. |
-| `workdays` | A make-up-workday set name or date array; those dates **are peak**, even off a peak weekday. |
+| `workdays` | A make-up-workday set name or date array; those dates **are peak**, even off a peak weekday. Not set by default. |
 
-The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00, **public holidays excluded**). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference — the built-in pricing entries reference the schedule **name** rather than an inlined copy, so your override applies to the built-in entries too.
+The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00, **public holidays excluded**, **and make-up workdays on weekends priced as off-peak too**). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference — the built-in pricing entries reference the schedule **name** rather than an inlined copy, so your override applies to the built-in entries too.
 
 **Mainland China public holidays ship with the package** in `data/cn-holidays.json` (dates taken from the [State Council's annual holiday notice](https://www.gov.cn/zhengce/content/202511/content_7047090.htm)). The built-in `deepseek` schedule references its `cn` set, so the official "public holidays excluded" rule applies by default. A rule card's "Public holidays" dropdown lets your own schedules use the same set.
+
+> Official pricing: **make-up workdays on weekends are not peak**, so when matching the official rate do not attach `workdays` to the `deepseek` schedule. `workdays` is a general switch for providers that do charge peak on make-up weekends.
 
 > Editor behaviour (suggestions, numeric drafts and zeroing, the pre-save blocks, rule cards and renaming, the split hour/minute inputs, and more) is documented in [`docs/configuration.md`](docs/configuration.md).
 

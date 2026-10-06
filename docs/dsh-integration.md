@@ -8,7 +8,9 @@
 
 ## 版本兼容
 
-核对范围是 `dsh-v0.1.5-rc.1` 到 `dsh-v0.1.7-rc.1` 之间的 8 个 tag（`0.1.5-rc.1/rc.2/rc.3`、`0.1.6-alpha.1/alpha.2`、`0.1.7-alpha.1/alpha.2/rc.1`）。
+核对范围是 `dsh-v0.1.5-rc.1` 到 `dsh-v0.1.7-rc.1` 之间的 8 个 tag（`0.1.5-rc.1/rc.2/rc.3`、`0.1.6-alpha.1/alpha.2`、`0.1.7-alpha.1/alpha.2/rc.1`），并在 **`dsh-v0.1.7-rc.2`、`dsh-v0.2.0-rc.1`、`dsh-v0.2.0-rc.2`** 上对同一组契约面做了复核对。上游从 `0.1.6-alpha.2` 到 `0.2.0-rc.2` 之间改动很大（`0.1.7-rc.1`（当前 GUI 基线）→`0.2.0-rc.2` 有 794 个提交、1155 个文件），但**本插件依赖的表面全部没有变**：图标导出名、`conversation.composer.dock` 的 `{ kind: 'list', scope: 'session' }`、`Menu`/`Button` 的导出与 props、`--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter` 这些设计 token、`useProjection` 标准座位、以及 host 侧的 `sessionProjections.register`、`ctx.inject`、`ctx.get('llm')`、`ctx.webServer.register`、`ctx.locale.register`、`settings.section` 与 `ctx.slots.inject`——逐一在 `dsh-v0.2.0-rc.2` 上确认存在，`Menu`/`Button` 的 props 接口还与 `0.1.7-rc.1` 逐字一致。
+
+因此**没有出现第三条版本边界**。
 
 **全程稳定的契约面**（8 个 tag 逐个核对）：
 
@@ -77,7 +79,9 @@ This plugin is a third-party bundle riding on DSH's **pre-stable public interfac
 
 ## Version compatibility
 
-The check covered the eight tags from `dsh-v0.1.5-rc.1` to `dsh-v0.1.7-rc.1` (`0.1.5-rc.1/rc.2/rc.3`, `0.1.6-alpha.1/alpha.2`, `0.1.7-alpha.1/alpha.2/rc.1`).
+The check covered the eight tags from `dsh-v0.1.5-rc.1` to `dsh-v0.1.7-rc.1` (`0.1.5-rc.1/rc.2/rc.3`, `0.1.6-alpha.1/alpha.2`, `0.1.7-alpha.1/alpha.2/rc.1`), and **re-audited the same contract surfaces on `dsh-v0.1.7-rc.2`, `dsh-v0.2.0-rc.1` and `dsh-v0.2.0-rc.2`**. The upstream change from `0.1.7-rc.1` (the current GUI baseline) to `0.2.0-rc.2` is large — 794 commits and 1155 files — but **every surface this plugin touches stayed put**: the icon export names, `conversation.composer.dock`'s `{ kind: 'list', scope: 'session' }`, the exports and props of `Menu`/`Button`, the design tokens `--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter`, the `useProjection` standard seat, and on the host side `sessionProjections.register`, `ctx.inject`, `ctx.get('llm')`, `ctx.webServer.register`, `ctx.locale.register`, `settings.section` and `ctx.slots.inject` — each confirmed present on `dsh-v0.2.0-rc.2`, with the `Menu`/`Button` props identical to `0.1.7-rc.1` verbatim.
+
+So **no third version boundary appeared**.
 
 **Contracts that held throughout** (checked tag by tag):
 
