@@ -18,15 +18,31 @@ import { pathToFileURL } from 'node:url'
 
 let passed = 0
 const failures = []
+/** 未落定的异步用例；汇总前必须等它们跑完。 */
+const pending = []
 
-/** 运行一个用例并记录结果。 */
+/**
+ * 运行一个用例并记录结果。
+ *
+ * 异步用例必须登记到 `pending` 里而不是就地计数：本文件末尾的 `process.exit()`
+ * 跑在微任务之前，直接调用 `body()` 的话异步断言根本来不及执行就被杀掉，用例会
+ * 无条件算作通过——这正是「两侧时段兜底一致」等三条用例此前形同虚设的原因。
+ * @param label - 用例名。
+ * @param body - 用例体，可返回 promise。
+ */
 function test(label, body) {
+  let result
   try {
-    body()
-    passed += 1
+    result = body()
   } catch (error) {
     failures.push({ label, error })
+    return
   }
+  if (result !== null && typeof result?.then === 'function') {
+    pending.push(result.then(() => { passed += 1 }, (error) => { failures.push({ label, error }) }))
+    return
+  }
+  passed += 1
 }
 
 //#region 加载模块
@@ -1681,6 +1697,44 @@ test('明细面板把「未记录时段」的用量说出来', () => {
   assert.match(html, /有 1,000,000 tokens 是在峰谷规则生效之前记录的/)
 })
 
+test('DeepSeek 账号路由在浏览器半同样命中官方条目', async () => {
+  // 回归：`deepseek-account`（DSH 的「DeepSeek 账号」路由）与 `deepseek-official`
+  // 是两条路由、一套价。浏览器半的 matchEntry 是 host 半的镜像实现，别名表漏同步
+  // 会让胶囊把账号路由显示成未配置价格。
+  const hostPricing = await import('../lib/pricing.js')
+  const rows = [{
+    provider: 'deepseek-account',
+    model: 'deepseek-v4-flash',
+    tariff: 'peak',
+    input: 1_000_000,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+  }]
+  const host = hostPricing.computeCost(rows, hostPricing.BUILTIN_PRICING, 'CNY')
+  const browser = clientExports.computeView({ rows }, hostPricing.BUILTIN_PRICING, 'CNY')
+  assert.equal(host.unpriced.length, 0, 'host 半不应判为未配置')
+  assert.equal(browser.unpricedCount, 0, '浏览器半不应判为未配置')
+  assert.equal(host.amount, 2, '百万未命中输入按 flash 高峰价 2 计')
+  assert.equal(browser.amount, 2, '两侧金额必须一致')
+
+  // 胶囊上的计费模式走的是同一份镜像匹配。
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-account', model: 'deepseek-v4-flash' },
+      rows,
+    }),
+    t,
+    pricing: fakePricing({ entries: [SPLIT_BUILTIN] }),
+  }))
+  assert.match(html, /<span class="tf_mode">计费模式：峰谷<\/span>/, '账号路由应命中间隔峰谷的内置条目')
+  assert.doesNotMatch(html, /未配置价格/)
+  assert.match(html, /2[.,]00/)
+})
+
 test('两侧对未定价模型的判定一致', async () => {
   const hostPricing = await import('../lib/pricing.js')
   const rows = [{ provider: 'nobody', model: 'nothing', tariff: 'peak', input: 100, cacheRead: 0, cacheWrite: 0, output: 100 }]
@@ -1698,6 +1752,9 @@ test('两侧对未定价模型的判定一致', async () => {
 if (!hasRealReact) {
   console.warn('警告：未找到 profile 的 React，渲染用例已跳过')
 }
+
+// 等所有异步用例落定，再汇总——异步断言晚于同步部分完成，先于它们退出就会漏报。
+await Promise.all(pending)
 
 for (const failure of failures) {
   console.error(`✗ ${failure.label}`)

@@ -151,6 +151,8 @@ node scripts/install.mjs --check    # 校验既有安装
 
 没有命中任何条目的模型，其 token 数照常展示，金额标记为「未配置价格」，**不计入合计**。
 
+内置价目同时覆盖 DSH 的两条 DeepSeek 路由：`deepseek-official`（API key）与 **`deepseek-account`**（「DeepSeek 账号」，账号令牌）。两者共用同一份模型目录，账号侧还能回退已下线的模型名。
+
 ### 峰谷规则
 
 `schedule` 描述高峰时段：

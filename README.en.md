@@ -151,6 +151,8 @@ Entries match on `(provider, model)`, highest priority first: **exact → provid
 
 A model that matches no entry still shows its token counts, but its amount is marked as unpriced and is **excluded from the total**.
 
+The built-in pricing covers both of DSH's DeepSeek routes: `deepseek-official` (API key) and **`deepseek-account`** ("DeepSeek Account", an account token). They share one model catalog, and the account side also falls back through retired model names.
+
 ### Peak/off-peak schedules
 
 A `schedule` describes the peak window:

@@ -121,7 +121,9 @@
 
 条目按 `(provider, model)` 匹配，优先级从高到低：**精确 → provider 通配 → model 通配 → 全通配**；同一优先级内先出现的条目获胜。
 
-历史路由 id `deepseek` 会回退到 `deepseek-official`，已下线模型名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 会回退到 `deepseek-flash`。
+历史路由 id `deepseek`、以及 DSH 的 **DeepSeek 账号路由 `deepseek-account`**（`@deepseek-ai/dsh-llm-deepseek-account`，界面里叫「DeepSeek 账号」），都会回退到 `deepseek-official`；已下线模型名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 会回退到 `deepseek-flash`。
+
+两条 DeepSeek 路由共用同一套 Messages 传输与同一份模型目录，只是鉴权方式不同（API key 与账号令牌），账号侧的模型 id 是 `deepseek-v4-flash` / `deepseek-v4-pro`，因此两条路由的用量都能命中内置价目。回退**只在精确命中失败后发生**——想给账号路由单独定价，按 `provider: "deepseek-account"` 加一条即可，它会优先获胜。
 
 没有命中任何条目的模型，其 token 数照常展示，金额标记为「未配置价格」，**不计入合计**。
 
@@ -258,7 +260,9 @@ In the UI each peak window is entered as two narrow fields per clock, digits onl
 
 Entries match on `(provider, model)`, highest priority first: **exact → provider wildcard → model wildcard → full wildcard**; within one priority the earliest entry wins.
 
-The historical route id `deepseek` falls back to `deepseek-official`, and the retired model names `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` fall back to `deepseek-flash`.
+The historical route id `deepseek`, and DSH's **DeepSeek account route `deepseek-account`** (`@deepseek-ai/dsh-llm-deepseek-account`, shown as "DeepSeek Account" in the UI), both fall back to `deepseek-official`; the retired model names `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` fall back to `deepseek-flash`.
+
+The two DeepSeek routes share one Messages transport and one model catalog and differ only in authentication (an API key versus an account token); the account side's model ids are `deepseek-v4-flash` and `deepseek-v4-pro`. Usage on either route therefore matches the built-in pricing. The fallback happens **only after an exact match fails** — to price the account route separately, add an entry with `provider: "deepseek-account"` and it wins.
 
 A model that matches no entry still shows its token counts, but its amount is marked as unpriced and is **excluded from the total**.
 

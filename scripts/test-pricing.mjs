@@ -170,6 +170,47 @@ test('已下线模型名回退到在售模型名', () => {
   assert.equal(matchEntry(entries, 'deepseek-official', 'deepseek-v4-flash').id, 'e1')
 })
 
+test('DeepSeek 账号路由回退到官方条目', () => {
+  // DSH 有两条 DeepSeek 路由：`deepseek-official`（API key，llm-deepseek-api-key）
+  // 与 `deepseek-account`（账号令牌，llm-deepseek-account，界面里叫「DeepSeek 账号」）。
+  // 两者共用同一套 Messages 传输与同一份模型目录，不做这层回退的话账号路由的用量
+  // 会整段落进「未配置价格」而从合计里消失。
+  const entries = validatePricing([entry()])
+  assert.equal(matchEntry(entries, 'deepseek-account', 'deepseek-flash').id, 'e1')
+  // 账号侧的真实模型 id 与官方侧不同（deepseek-v4-flash），由模型别名接手。
+  assert.equal(matchEntry(entries, 'deepseek-account', 'deepseek-v4-flash').id, 'e1')
+})
+
+test('账号路由命中内置价目，而不是落到未配置', () => {
+  // 端到端：内置表 + 账号路由实际会出现的 (provider, model) 组合。
+  assert.equal(
+    matchEntry(BUILTIN_PRICING, 'deepseek-account', 'deepseek-v4-flash')?.id,
+    'builtin-deepseek-official-flash-cny',
+  )
+  assert.equal(
+    matchEntry(BUILTIN_PRICING, 'deepseek-account', 'deepseek-v4-pro')?.id,
+    'builtin-deepseek-official-v4-pro-cny',
+  )
+})
+
+test('用户为账号路由单独配置的条目优先于别名回退', () => {
+  // 别名的语义是「回退」，精确命中永远先赢——账号路由若另有价，用户加一条即可。
+  const entries = validatePricing([
+    entry(),
+    entry({ id: 'e2', model: 'deepseek-v4-pro' }),
+    {
+      id: 'acct',
+      provider: 'deepseek-account',
+      model: 'deepseek-v4-flash',
+      currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    },
+  ])
+  assert.equal(matchEntry(entries, 'deepseek-account', 'deepseek-v4-flash').id, 'acct')
+  // 未单独配置的账号侧模型仍走别名回退。
+  assert.equal(matchEntry(entries, 'deepseek-account', 'deepseek-v4-pro').id, 'e2')
+})
+
 test('用户条目可覆盖内置条目的价格', () => {
   const merged = mergePricingLayers([
     BUILTIN_PRICING,
