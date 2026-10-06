@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   BUILTIN_PRICING,
   BUILTIN_SCHEDULES,
@@ -14,12 +15,18 @@ import {
   matchEntry,
   mergePricingLayers,
   normalizeEntry,
+  normalizeHolidaySets,
   tariffAt,
   tariffOf,
   tariffStateAt,
   validatePricing,
   validateSchedules,
 } from '../lib/pricing.js'
+
+/** 随包发布的节假日数据，与 host 半读的是同一个文件。 */
+const CN_HOLIDAY_SETS = normalizeHolidaySets(
+  JSON.parse(readFileSync(new URL('../data/cn-holidays.json', import.meta.url), 'utf8')).sets,
+)
 
 let passed = 0
 const failures = []
@@ -261,6 +268,113 @@ test('无空闲价的条目恒为 peak', () => {
   const item = normalizeEntry(entry())
   assert.equal(tariffAt(item, SATURDAY), 'peak')
 })
+
+//#region 节假日
+
+// 2026-02-16 是周一（高峰星期），也是春节假期内的一天：北京时间 10:00 本是高峰。
+const HOLIDAY_MONDAY_PEAK = Date.UTC(2026, 1, 16, 2, 0)
+// 2026-02-14 是周六（非高峰星期），也是春节前的调休上班日。
+const WORKDAY_SATURDAY_PEAK = Date.UTC(2026, 1, 14, 2, 0)
+
+test('法定节假日落在高峰星期也判为 offPeak', () => {
+  const item = normalizeEntry(splitEntry(), 'pricing entry', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  // 同一天的相邻周（2026-02-09）是普通周一，用于对照：确实是「假期」在起作用。
+  assert.equal(tariffAt(item, Date.UTC(2026, 1, 9, 2, 0)), 'peak')
+  assert.equal(tariffAt(item, HOLIDAY_MONDAY_PEAK), 'offPeak')
+})
+
+test('内置 deepseek 调度真的挂上了 cn 集合', () => {
+  // 回归：内置调度按名字引用 `cn`，若装载期没把集合表传下去，这个引用会解析成
+  // 空数组——判定退化成纯工作日，假期照旧按高峰价算，而且不报错。
+  const item = normalizeEntry(splitEntry(), 'pricing entry', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  assert.ok(item.schedule.holidays.length > 0, '内置调度的 holidays 应展开成非空日期数组')
+  assert.ok(item.schedule.holidays.includes('2026-02-16'))
+  // 未把集合表传下去时退化成空数组，因此上面那条断言是真正在守这件事的。
+  assert.deepEqual(normalizeEntry(splitEntry()).schedule.holidays, [])
+})
+
+test('调休上班的周末按 workdays 判为 peak', () => {
+  const inline = {
+    timezone: 'Asia/Shanghai',
+    peakDays: [1, 2, 3, 4, 5],
+    peakWindows: [['09:00', '12:00']],
+    workdays: 'cn',
+  }
+  const item = normalizeEntry(entry({
+    schedule: inline,
+    prices: { peak: { input: 2, cacheRead: 0.04, output: 8 }, offPeak: { input: 1, cacheRead: 0.02, output: 4 } },
+  }), 'pricing entry', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  // 2026-02-14 是周六，普通周六是空闲；挂上 workdays 后它变成高峰日。
+  assert.equal(tariffAt(item, WORKDAY_SATURDAY_PEAK), 'peak')
+  // 普通周六仍然空闲。
+  assert.equal(tariffAt(item, SATURDAY), 'offPeak')
+})
+
+test('假期与调休同日时以假期为准', () => {
+  const both = {
+    timezone: 'Asia/Shanghai',
+    peakDays: [1],
+    peakWindows: [['09:00', '12:00']],
+    holidays: ['2026-02-16'],
+    workdays: ['2026-02-16'],
+  }
+  const item = normalizeEntry(entry({
+    schedule: both,
+    prices: { peak: { input: 2, cacheRead: 0.04, output: 8 }, offPeak: { input: 1, cacheRead: 0.02, output: 4 } },
+  }))
+  assert.equal(tariffAt(item, HOLIDAY_MONDAY_PEAK), 'offPeak')
+})
+
+test('内置调度的假期能一路推到下一次切换（跨 9 天春节）', () => {
+  // 2026 年春节连休 9 天。逐日推进的上限若还是 8 天，从假期第一天起就找不到下一次
+  // 切换，倒计时会消失。
+  const item = normalizeEntry(splitEntry(), 'pricing entry', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  const start = Date.UTC(2026, 1, 15, 1, 0)
+  assert.equal(tariffAt(item, start), 'offPeak')
+  const state = tariffStateAt(item, start)
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  // 假期结束后第一个工作日的 09:00，即北京时间 2026-02-24 09:00。
+  assert.equal(new Date(state.remainingMs + start).toISOString(), '2026-02-24T01:00:00.000Z')
+})
+
+test('节假日集合可以内联日期数组，非法日期被拒绝', () => {
+  const inline = {
+    timezone: 'Asia/Shanghai',
+    peakDays: [1],
+    peakWindows: [['09:00', '12:00']],
+    holidays: ['2026-02-16'],
+  }
+  const item = normalizeEntry(entry({
+    schedule: inline,
+    prices: { peak: { input: 2, cacheRead: 0.04, output: 8 }, offPeak: { input: 1, cacheRead: 0.02, output: 4 } },
+  }))
+  assert.deepEqual([...item.schedule.holidays], ['2026-02-16'])
+  assert.throws(() => normalizeEntry(entry({
+    schedule: { ...inline, holidays: ['2026-02-30'] },
+    prices: { peak: { input: 2, cacheRead: 0.04, output: 8 }, offPeak: { input: 1, cacheRead: 0.02, output: 4 } },
+  })), /真实日期/)
+})
+
+test('引用不存在的节假日集合直接报错', () => {
+  // 与「数据文件缺失」区分开：用户写错名字是配置错误，必须立刻知道。
+  assert.throws(() => normalizeEntry(entry({
+    schedule: { timezone: 'UTC', peakDays: [1], peakWindows: [['09:00', '12:00']], holidays: 'cnn' },
+    prices: { peak: { input: 2, cacheRead: 0.04, output: 8 }, offPeak: { input: 1, cacheRead: 0.02, output: 4 } },
+  })), /未定义的节假日集合 "cnn"/)
+})
+
+test('随包发布的节假日数据形如约定', () => {
+  const cn = CN_HOLIDAY_SETS.cn
+  assert.ok(cn !== undefined, '应有 cn 集合')
+  assert.equal(cn.name, '中国大陆法定节假日')
+  // 2026 年国务院口径：33 天假期、6 天调休上班。
+  assert.equal(cn.holidays.length, 33)
+  assert.equal(cn.workdays.length, 6)
+  for (const date of cn.holidays) assert.match(date, /^2026-\d{2}-\d{2}$/)
+})
+
+//#endregion
 
 test('自定义调度规则生效', () => {
   const schedules = validateSchedules({

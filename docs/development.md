@@ -42,6 +42,7 @@ npm run pack:check    # npm pack --dry-run，核对发布载荷
 | `lib/pricing.js` | 纯定价原语：内置表、命名调度、分层合并、条目匹配、时段判定与倒计时、费用换算 |
 | `lib/index.js` | host 半：`tokenFee` 会话投影 + 价目表读写端点 |
 | `lib/client.js` | 浏览器半：费用胶囊（含计费模式与倒计时）、明细面板、价格编辑器、设置页 |
+| `data/cn-holidays.json` | 大陆法定节假日数据；host 在装载期同步读一次，年度更新只改这个文件 |
 | `cordis.patch.yml` | bundle 层 patch，挂载 host 半 |
 | `scripts/install.mjs` | 无法使用 `dsh plugin` 时的备选安装器 |
 
@@ -96,6 +97,7 @@ npm run pack:check    # npm pack --dry-run, to check the published payload
 | `lib/pricing.js` | Pure pricing primitives: the built-in table, named schedules, layer merging, entry matching, tariff decisions and countdown, cost conversion |
 | `lib/index.js` | Host half: the `tokenFee` session projection plus the pricing read/write endpoints |
 | `lib/client.js` | Browser half: the cost pill (with billing mode and countdown), the breakdown panel, the price editor, the settings page |
+| `data/cn-holidays.json` | Mainland China holiday data; the host reads it once at load, and the yearly update touches only this file |
 | `cordis.patch.yml` | Bundle-layer patch mounting the host half |
 | `scripts/install.mjs` | Fallback installer for when `dsh plugin` is unavailable |
 

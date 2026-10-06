@@ -327,6 +327,9 @@ const t = (key, params) => {
     'editor.timezone': '时区',
     'editor.peakDays': '高峰星期',
     'editor.peakWindows': '高峰时段',
+    'editor.holidays': '法定节假日',
+    'editor.holidaysNone': '不排除',
+    'editor.holidaysHint': '选中的节假日集合里，那些日期不算高峰。',
     'editor.addWindow': '新增时段',
     'weekday.mon': '一',
     'weekday.tue': '二',
@@ -398,6 +401,7 @@ function renderScheduleEditor(overrides = {}) {
     name: 'deepseek',
     schedule: { timezone: 'Asia/Shanghai', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00']] },
     scheduleNames: ['deepseek'],
+    holidaySets: FAKE_HOLIDAY_SETS,
     builtin: false,
     overridden: false,
     t,
@@ -407,6 +411,11 @@ function renderScheduleEditor(overrides = {}) {
     onCollapse: () => {},
     ...overrides,
   }))
+}
+
+/** 节假日集合替身，形状与 host 快照里的 `holidaySets` 一致。 */
+const FAKE_HOLIDAY_SETS = {
+  cn: { name: '中国大陆法定节假日', holidays: ['2026-02-16'], workdays: ['2026-02-14'] },
 }
 
 /** 构造一个捕获 slot 注册的客户端上下文替身。 */
@@ -599,6 +608,86 @@ test('表单控件沿用官方 ConfigField 的配方', () => {
   // 非法值走官方属性，不再自造 data 属性。
   assert.match(cssText, /\[aria-invalid='true'\]/)
   assert.doesNotMatch(cssText, /\[data-invalid\]/)
+})
+
+test('规则表单给出法定节假日下拉框', () => {
+  // 数据随包发布、由 host 通过快照送达，因此界面里只可能选到真实存在的集合；
+  // 值写的是集合名而不是日期数组，落盘时保持名字，换一年的数据只需换配置文件。
+  const html = renderScheduleEditor()
+  assert.match(html, /<span class="tf_fieldLabel">法定节假日<\/span>/)
+  assert.match(html, /<option value=""[^>]*>不排除<\/option>/, '要能选回「不排除」')
+  assert.match(html, /<option value="cn"[^>]*>中国大陆法定节假日<\/option>/, '选项用集合的展示名')
+  assert.match(html, /Dates in the selected holiday set|选中的节假日集合/, '应有说明')
+
+  // 选中态由草稿里的集合名决定。
+  const selected = renderScheduleEditor({
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']], holidays: 'cn' },
+  })
+  assert.match(selected, /<option value="cn"[^>]*selected[^>]*>中国大陆法定节假日<\/option>/)
+
+  // 文件里写了数据中没有的名字时补进选项，避免一编辑就把它丢掉。
+  const unknown = renderScheduleEditor({
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']], holidays: 'custom' },
+  })
+  assert.match(unknown, /<option value="custom"[^>]*selected[^>]*>custom<\/option>/)
+})
+
+test('规则摘要带上节假日集合的展示名', () => {
+  const collapsed = render(react.createElement(clientExports.RuleCard, {
+    name: 'mine',
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']], holidays: 'cn' },
+    badge: '自定义规则',
+    holidaySets: FAKE_HOLIDAY_SETS,
+    t,
+    actions: null,
+  }))
+  assert.match(collapsed, /Asia\/Shanghai · 周一 · 09:00–12:00 · 中国大陆法定节假日/)
+  // 没挂集合时不显示这一段。
+  const plain = render(react.createElement(clientExports.RuleCard, {
+    name: 'mine',
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1], peakWindows: [['09:00', '12:00']] },
+    badge: '自定义规则',
+    holidaySets: FAKE_HOLIDAY_SETS,
+    t,
+    actions: null,
+  }))
+  assert.doesNotMatch(plain, /中国大陆法定节假日/)
+})
+
+test('浏览器半的时段判定与 host 半一样认节假日', async () => {
+  // 两侧的 tariffAt 是两份镜像实现；浏览器侧漏掉节假日会让胶囊把假期显示成高峰，
+  // 而 host 侧已经把那些样本记成 offPeak，倒计时就会指向错误的时刻。
+  const hostPricing = await import('../lib/pricing.js')
+  const schedule = {
+    timezone: 'Asia/Shanghai',
+    peakDays: [1, 2, 3, 4, 5],
+    peakWindows: [['09:00', '12:00']],
+    holidays: ['2026-02-16'],
+    workdays: ['2026-02-14'],
+  }
+  const prices = {
+    peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+    offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+  }
+  const hostEntry = hostPricing.normalizeEntry({
+    id: 'x', provider: 'deepseek-official', model: 'deepseek-flash', currency: 'CNY', schedule, prices,
+  })
+  const browserEntry = { id: 'x', provider: 'deepseek-official', model: 'deepseek-flash', currency: 'CNY', schedule, prices }
+  // 假期内的周一 10:00、调休的周六 10:00、以及作为对照的普通周一与普通周六。
+  for (const at of [
+    Date.UTC(2026, 1, 16, 2, 0),
+    Date.UTC(2026, 1, 14, 2, 0),
+    Date.UTC(2026, 1, 9, 2, 0),
+    Date.UTC(2026, 7, 15, 2, 0),
+  ]) {
+    assert.equal(
+      clientExports.tariffAt(browserEntry, at),
+      hostPricing.tariffAt(hostEntry, at),
+      `${new Date(at).toISOString()} 两侧判定应一致`,
+    )
+  }
+  assert.equal(clientExports.tariffAt(browserEntry, Date.UTC(2026, 1, 16, 2, 0)), 'offPeak')
+  assert.equal(clientExports.tariffAt(browserEntry, Date.UTC(2026, 1, 14, 2, 0)), 'peak')
 })
 
 test('apply 注册费用胶囊与设置页', () => {

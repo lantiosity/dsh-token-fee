@@ -48,6 +48,8 @@ jobs:
             'lib/index.js',
             'lib/client.js',
             'lib/pricing.js',
+            // 装载期同步读取：缺了插件会直接装载失败，因此必须钉在载荷里。
+            'data/cn-holidays.json',
             'scripts/install.mjs',
             'README.md',
             'README.en.md',

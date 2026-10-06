@@ -162,8 +162,12 @@ A `schedule` describes the peak window:
 | `timezone` | IANA timezone name, for example `Asia/Shanghai`. |
 | `peakDays` | Peak weekdays, `0` being Sunday. |
 | `peakWindows` | Peak windows, half-open `["HH:MM", "HH:MM"]` intervals. |
+| `holidays` | A holiday set name or date array; those dates are **not peak**, even on a peak weekday. |
+| `workdays` | A make-up-workday set name or date array; those dates **are peak**, even off a peak weekday. |
 
-The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference — the built-in pricing entries reference the schedule **name** rather than an inlined copy, so your override applies to the built-in entries too.
+The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00, **public holidays excluded**). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference — the built-in pricing entries reference the schedule **name** rather than an inlined copy, so your override applies to the built-in entries too.
+
+**Mainland China public holidays ship with the package** in `data/cn-holidays.json` (dates taken from the [State Council's annual holiday notice](https://www.gov.cn/zhengce/content/202511/content_7047090.htm)). The built-in `deepseek` schedule references its `cn` set, so the official "public holidays excluded" rule applies by default. A rule card's "Public holidays" dropdown lets your own schedules use the same set.
 
 > Editor behaviour (suggestions, numeric drafts and zeroing, the pre-save blocks, rule cards and renaming, the split hour/minute inputs, and more) is documented in [`docs/configuration.md`](docs/configuration.md).
 
@@ -181,7 +185,7 @@ All figures are CNY per million tokens, taken from DeepSeek's official pricing p
 ## Known limitations
 
 - **The endpoints are unavailable over a remote address**: the pricing endpoints accept loopback origins only. Reaching the GUI over a remote address such as Tailscale makes reads and writes return 403 and the panel show everything as unpriced. Edit `<DSH_HOME>/token-fee.json` directly instead.
-- **Chinese public holidays**: the official peak decision excludes public holidays, while this plugin decides by natural weekdays, so holidays are overpriced as peak. For exact billing, adjust the schedule for those days or use a flat price.
+- **The holiday data needs updating every year**: `data/cn-holidays.json` currently covers 2026 only (the State Council's notice for a new year usually lands in the previous November). A year with no data falls back to the natural-weekday decision, so that year's public holidays count as peak.
 - **Cross-currency**: amounts in different currencies are not converted or merged. The pill and the total count the display currency only; other currencies are reported separately in the breakdown.
 - **The countdown does not carry hours into days**: a long gap across a weekend is shown as total hours (for example `63:00:00`).
 

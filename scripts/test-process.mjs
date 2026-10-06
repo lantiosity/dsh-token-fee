@@ -234,6 +234,11 @@ try {
     if (body.displayCurrency !== PROBE_CURRENCY) {
       throw new Error(`displayCurrency 覆盖未生效：期望 ${PROBE_CURRENCY}，得到 ${body.displayCurrency}`)
     }
+    // 节假日数据由 `new URL('../data/cn-holidays.json', import.meta.url)` 定位，
+    // 这条断言确认它在真实装载路径下解析得到——装错位置或漏进 files 都会在这里露出来。
+    if (!Array.isArray(body.holidaySets?.cn?.holidays) || body.holidaySets.cn.holidays.length === 0) {
+      throw new Error(`节假日数据未随快照返回：${JSON.stringify(body.holidaySets)}`)
+    }
   })
 
   await test('缺少动作头的写请求被拒绝且进程存活', async () => {

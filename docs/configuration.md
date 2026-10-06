@@ -136,8 +136,33 @@
 | `timezone` | IANA 时区名，例如 `Asia/Shanghai`。配置界面的下拉框按当前 UTC 偏移排序，同偏移内按名字排序且 `UTC` 居首。 |
 | `peakDays` | 高峰星期，`0` 为周日。 |
 | `peakWindows` | 高峰时段，`["HH:MM", "HH:MM"]` 的左闭右开区间。 |
+| `holidays` | 节假日集合名或 `YYYY-MM-DD` 日期数组；这些日期**不算高峰**。 |
+| `workdays` | 调休上班集合名或日期数组；这些日期**算高峰**。 |
 
-插件内置一条名为 `deepseek` 的规则（北京时间周一至周五 09:00–12:00、14:00–18:00）。你可以在用户文件的 `schedules` 中定义同名规则来覆盖它，或新建自己的规则供条目引用。
+判定顺序是：先看 `holidays`（命中即空闲，即使落在高峰星期），再看它是不是高峰日——`peakDays` 命中的星期，或 `workdays` 命中的日期——最后才看是否落在某个 `peakWindows` 区间内。同一天同时出现在 `holidays` 与 `workdays` 里时**以假期为准**。
+
+集合名指向随包发布的 [`data/cn-holidays.json`](../data/cn-holidays.json)：
+
+```json
+{
+  "version": 1,
+  "sets": {
+    "cn": {
+      "name": "中国大陆法定节假日",
+      "source": "https://www.gov.cn/zhengce/content/202511/content_7047090.htm",
+      "updated": "2025-11-04",
+      "holidays": ["2026-01-01", "2026-02-15", "..."],
+      "workdays": ["2026-01-04", "2026-02-14", "..."]
+    }
+  }
+}
+```
+
+数据取自国务院办公厅的年度放假安排通知，**需要逐年更新**：新年度的通知通常在上一年的 11 月发布，文件里没有的年份会退回「按自然工作日判定」。引用一个不存在的集合名会在装载期报错——那是配置错误，不是缺数据。
+
+`deepseek` 这条内置规则引用 `cn` 的 `holidays`，但**没有**引用它的 `workdays`：官方的口径只到「法定节假日除外」，没有提调休上班的周末。要让调休周末按高峰计，自己加一条规则（或覆盖内置规则）把 `workdays` 也挂上 `cn` 即可。
+
+插件内置一条名为 `deepseek` 的规则（北京时间周一至周五 09:00–12:00、14:00–18:00，法定节假日除外）。你可以在用户文件的 `schedules` 中定义同名规则来覆盖它，或新建自己的规则供条目引用。
 
 在界面上直接改这条内置规则即可：内置价目条目引用的是**规则名** `deepseek` 而不是内联的一份规则副本，因此你的覆盖会同时作用到内置条目上——官方调整高峰时段时，改一处就够了。内置规则卡片没有删除键（它总能被覆盖），自定义规则卡片有。
 
@@ -275,7 +300,32 @@ A `schedule` describes the peak window:
 | `timezone` | IANA timezone name, for example `Asia/Shanghai`. The editor's dropdown is ordered by current UTC offset, ties broken by name with `UTC` first. |
 | `peakDays` | Peak weekdays, `0` being Sunday. |
 | `peakWindows` | Peak windows, half-open `["HH:MM", "HH:MM"]` intervals. |
+| `holidays` | A holiday set name or an array of `YYYY-MM-DD` dates; those dates are **not peak**. |
+| `workdays` | A make-up-workday set name or date array; those dates **are peak**. |
 
-The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference.
+The decision order is: `holidays` first (a hit means off-peak, even on a peak weekday), then whether it is a peak day at all — a weekday in `peakDays`, or a date in `workdays` — and only then whether the time falls inside a `peakWindows` interval. When one date appears in both `holidays` and `workdays`, **the holiday wins**.
+
+A set name points at the packaged [`data/cn-holidays.json`](../data/cn-holidays.json):
+
+```json
+{
+  "version": 1,
+  "sets": {
+    "cn": {
+      "name": "中国大陆法定节假日",
+      "source": "https://www.gov.cn/zhengce/content/202511/content_7047090.htm",
+      "updated": "2025-11-04",
+      "holidays": ["2026-01-01", "2026-02-15", "..."],
+      "workdays": ["2026-01-04", "2026-02-14", "..."]
+    }
+  }
+}
+```
+
+The dates come from the State Council's annual holiday notice and **need updating every year**: a new year's notice usually lands in the previous November, and a year with no data falls back to the natural-weekday decision. Referencing a set that does not exist fails at load time — that is a configuration error, not missing data.
+
+The built-in `deepseek` schedule references `cn`'s `holidays` but **not** its `workdays`: the official wording stops at "public holidays excluded" and says nothing about make-up workdays on weekends. To count those as peak, add your own rule (or override the built-in one) with `workdays: "cn"` as well.
+
+The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 09:00–12:00 and 14:00–18:00, public holidays excluded). Define a schedule of the same name in the user file's `schedules` to override it, or add your own for entries to reference.
 
 You can also edit that built-in rule directly in the UI: the built-in pricing entries reference the schedule **name** `deepseek` rather than an inlined copy of the rule, so your override applies to the built-in entries too — when the official peak windows change, one edit is enough. The built-in rule card has no delete button (it can always be overridden); custom rule cards do.
