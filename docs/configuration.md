@@ -10,7 +10,7 @@
 
 价目表由三层合并而成，**后者覆盖前者**：
 
-1. 插件内置层：只有 DeepSeek 官方路由 `deepseek-official` 的价格与峰谷规则；
+1. 插件内置层：DeepSeek **两条路由**（`deepseek-official` 与 `deepseek-account`）× 两个模型（`deepseek-flash`、`deepseek-v4-pro`）的价格与峰谷规则，共 4 条；
 2. 用户文件层：`<DSH_HOME>/token-fee.json`；
 3. 插件配置层：cordis 配置中的 `pricing` / `schedules` 字段。
 
@@ -174,7 +174,7 @@ The complete reference for the pricing table and peak/off-peak schedules: the th
 
 The pricing table is merged from three layers, **each overriding the previous one**:
 
-1. Built-in layer: only the DeepSeek official route `deepseek-official` with its peak/off-peak rules;
+1. Built-in layer: DeepSeek's **two routes** (`deepseek-official` and `deepseek-account`) × two models (`deepseek-flash`, `deepseek-v4-pro`) with their peak/off-peak rules — four entries in total;
 2. User file layer: `<DSH_HOME>/token-fee.json`;
 3. Plugin config layer: the `pricing` / `schedules` fields of the cordis config.
 

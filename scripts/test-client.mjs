@@ -953,6 +953,24 @@ test('不区分峰谷的条目只渲染一行价格', () => {
   assert.doesNotMatch(html, /tf_priceRowLabel">空闲/)
 })
 
+test('只读区把 DeepSeek 两条路由的内置条目都列出来', async () => {
+  // 把账号路由显式列进内置表的意义就在这里：它在界面上是可见的一等公民，
+  // 而不是只能靠 provider 别名悄悄命中官方条目。
+  const hostPricing = await import('../lib/pricing.js')
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({ builtin: hostPricing.BUILTIN_PRICING }),
+  }))
+  assert.match(html, /deepseek-official/)
+  assert.match(html, /deepseek-account/, '账号路由应出现在只读的内置价目区')
+  // 账号路由的两个模型都在。
+  assert.equal((html.match(/deepseek-account/g) ?? []).length, 2)
+  assert.doesNotMatch(html, /未配置价格/)
+})
+
 test('时区使用带 UTC 偏移的下拉框', () => {
   // 规则默认收起，因此直接渲染规则表单，而不是走收敛态的卡片。
   const html = renderScheduleEditor()
@@ -1786,14 +1804,14 @@ test('明细面板把「未记录时段」的用量说出来', () => {
   assert.match(html, /有 1,000,000 tokens 是在峰谷规则生效之前记录的/)
 })
 
-test('DeepSeek 账号路由在浏览器半同样命中官方条目', async () => {
+test('DeepSeek 账号路由在浏览器半命中它自己的内置条目', async () => {
   // 回归：`deepseek-account`（DSH 的「DeepSeek 账号」路由）与 `deepseek-official`
-  // 是两条路由、一套价。浏览器半的 matchEntry 是 host 半的镜像实现，别名表漏同步
-  // 会让胶囊把账号路由显示成未配置价格。
+  // 是两条路由、一套价。内置表为账号路由单独列了条目；浏览器半的 matchEntry 是
+  // host 半的镜像实现，两边不同步会让胶囊把账号路由显示成未配置价格。
   const hostPricing = await import('../lib/pricing.js')
   const rows = [{
     provider: 'deepseek-account',
-    model: 'deepseek-v4-flash',
+    model: 'deepseek-flash',
     tariff: 'peak',
     input: 1_000_000,
     cacheRead: 0,
@@ -1806,8 +1824,18 @@ test('DeepSeek 账号路由在浏览器半同样命中官方条目', async () =>
   assert.equal(browser.unpricedCount, 0, '浏览器半不应判为未配置')
   assert.equal(host.amount, 2, '百万未命中输入按 flash 高峰价 2 计')
   assert.equal(browser.amount, 2, '两侧金额必须一致')
+  // 命中账号路由**自己的**内置条目，而不是靠 provider 别名绕到官方条目。
+  assert.equal(
+    hostPricing.matchEntry(hostPricing.BUILTIN_PRICING, 'deepseek-account', 'deepseek-flash')?.id,
+    'builtin-deepseek-account-flash-cny',
+  )
+  assert.equal(
+    hostPricing.matchEntry(hostPricing.BUILTIN_PRICING, 'deepseek-account', 'deepseek-flash')?.provider,
+    'deepseek-account',
+  )
 
-  // 胶囊上的计费模式走的是同一份镜像匹配。
+  // 胶囊上的计费模式走的是同一份镜像匹配。这里故意用官方侧的旧模型名
+  // `deepseek-v4-flash`，顺带覆盖「账号路由 + 模型别名」这条回退路径。
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')

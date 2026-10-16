@@ -81,7 +81,7 @@ node scripts/install.mjs --check    # 校验既有安装
 
 价目表由三层合并而成，**后者覆盖前者**：
 
-1. 插件内置层：只有 DeepSeek 官方路由 `deepseek-official` 的价格与峰谷规则；
+1. 插件内置层：DeepSeek **两条路由**（`deepseek-official`、`deepseek-account`）× 两个模型（`deepseek-flash`、`deepseek-v4-pro`）的价格与峰谷规则，共 4 条；
 2. 用户文件层：`<DSH_HOME>/token-fee.json`；
 3. 插件配置层：cordis 配置中的 `pricing` / `schedules` 字段。
 
@@ -182,7 +182,7 @@ node scripts/install.mjs --check    # 校验既有安装
 | `deepseek-v4-pro` | 高峰 | ¥0.30 | ¥9 | ¥27 |
 | `deepseek-v4-pro` | 空闲 | ¥0.15 | ¥4.5 | ¥13.5 |
 
-单位均为「元 / 百万 token」，来源为 DeepSeek 官方定价页，仅适用于 `deepseek-official` 路由。
+单位均为「元 / 百万 token」，来源为 DeepSeek 官方定价页。**两条 DeepSeek 路由各自成条目、价格相同**：`deepseek-official`（API key）与 `deepseek-account`（「DeepSeek 账号」，账号令牌）——账号路由因此在内置价目里可见、可单独覆盖，不必只靠 provider 别名回退。
 
 ## 已知限制
 

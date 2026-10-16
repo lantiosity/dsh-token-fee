@@ -408,7 +408,8 @@ await test('PricingStore 读取用户文件并覆盖内置层', async () => {
   const snapshot = store.snapshot()
   assert.equal(snapshot.file.exists, true)
   assert.equal(snapshot.file.error, null)
-  assert.equal(snapshot.entries.length, 2)
+  // 4 条内置条目 + 用户条目按 (provider, model, currency) 顶掉 deepseek-official/deepseek-flash。
+  assert.equal(snapshot.entries.length, 4)
   assert.equal(snapshot.entries.find(entry => entry.id === 'mine').prices.peak.input, 1)
   assert.equal(snapshot.file.path, file)
 })
@@ -453,7 +454,7 @@ await test('损坏的用户文件被报告且不污染有效表', async () => {
   await store.refresh()
   const snapshot = store.snapshot()
   assert.match(snapshot.file.error, /无效/)
-  assert.equal(snapshot.entries.length, 2)
+  assert.equal(snapshot.entries.length, 4)
 })
 
 await test('缺失的用户文件回落到内置层', async () => {
@@ -466,7 +467,7 @@ await test('缺失的用户文件回落到内置层', async () => {
   const snapshot = store.snapshot()
   assert.equal(snapshot.file.exists, false)
   assert.equal(snapshot.file.error, null)
-  assert.equal(snapshot.entries.length, 2)
+  assert.equal(snapshot.entries.length, 4)
 })
 
 await test('保存端点落盘时保留条目对命名调度的字符串引用', async () => {
@@ -616,10 +617,10 @@ await test('reset 清空用户层，回到内置条目', async () => {
   }), 'utf8')
   const store = new PricingStore(resolveConfig({ pricingFile: file }))
   await store.refresh()
-  assert.equal(store.snapshot().entries.length, 3)
+  assert.equal(store.snapshot().entries.length, 5)
   await store.reset()
   const after = store.snapshot()
-  assert.equal(after.entries.length, 2)
+  assert.equal(after.entries.length, 4)
   assert.equal(after.file.exists, false)
   assert.equal(after.file.entries.length, 0)
   await assert.rejects(readFile(file, 'utf8'), { code: 'ENOENT' })

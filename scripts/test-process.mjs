@@ -282,6 +282,11 @@ try {
   })
 
   await test('reset 生效并回到内置价目', async () => {
+    // 基线从端点现取，不硬编码内置条目数：内置表会随版本增删条目
+    // （例如把 deepseek-account 的模型显式列进去），硬编码会让这条用例无谓地碎掉。
+    const before = await (await fetchWithTimeout(PRICING)).json()
+    const builtinCount = before.entries.length
+    if (builtinCount === 0) throw new Error('内置条目为空，无法作为基线')
     const save = await fetchWithTimeout(PRICING, {
       method: 'POST',
       headers: { 'content-type': 'application/json', [ACTION_HEADER]: 'save' },
@@ -297,7 +302,9 @@ try {
     })
     if (save.status !== 200) throw new Error(`保存失败：${save.status}`)
     const saved = await save.json()
-    if (saved.entries.length !== 3) throw new Error(`期望 3 条，得到 ${saved.entries.length}`)
+    if (saved.entries.length !== builtinCount + 1) {
+      throw new Error(`期望 ${builtinCount + 1} 条，得到 ${saved.entries.length}`)
+    }
     const reset = await fetchWithTimeout(RESET, {
       method: 'POST',
       headers: { 'content-type': 'application/json', [ACTION_HEADER]: 'reset' },
@@ -305,7 +312,9 @@ try {
     })
     if (reset.status !== 200) throw new Error(`reset 失败：${reset.status}`)
     const after = await reset.json()
-    if (after.entries.length !== 2) throw new Error(`reset 后期望 2 条内置，得到 ${after.entries.length}`)
+    if (after.entries.length !== builtinCount) {
+      throw new Error(`reset 后期望 ${builtinCount} 条内置，得到 ${after.entries.length}`)
+    }
   })
 
   await test('全程结束后进程仍然存活', async () => {
