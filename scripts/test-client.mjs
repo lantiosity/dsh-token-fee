@@ -301,7 +301,13 @@ const t = (key, params) => {
     'pill.remaining': '剩余时间：{time}',
     'bucket.input': '缓存未命中',
     'detail.tariffSplit': '区分峰谷',
+    'detail.noPrice': '缺少价目条目',
+    'detail.unpriced': '未配置价格',
+    'detail.wildcard': '通配条目',
     'detail.flatBadge': '{tokens} 未记录时段',
+    'detail.cardTokens': '{tokens} token',
+    'detail.toggleModel': '展开或收起 {model} 的分桶明细',
+    'detail.groupMeta': '{tokens} tokens · {value}',
     'detail.flatNote': '有 {tokens} tokens 是在峰谷规则生效之前记录的，插件无法判断它们属于哪个时段，现按高峰价计入。改一次价格配置即可让历史重新计算。',
     'bucket.cacheRead': '缓存命中',
     'bucket.cacheWrite': '缓存写入',
@@ -427,6 +433,48 @@ function renderScheduleEditor(overrides = {}) {
 /** 节假日集合替身，形状与 host 快照里的 `holidaySets` 一致。 */
 const FAKE_HOLIDAY_SETS = {
   cn: { name: '中国大陆法定节假日', holidays: ['2026-02-16'], workdays: ['2026-02-14'] },
+}
+
+/**
+ * 渲染一张只读价目卡片。
+ *
+ * 条目列表现在默认按供应商折叠，凡是要断言卡片内部排版（单价表、页脚、徽章）的
+ * 用例都应当直接渲染这张卡片，而不是绕经设置页再去展开分组——被测单元本来就是
+ * 卡片，不是折叠层。
+ * @param entry - 条目。
+ * @param overrides - 覆盖默认的 props。
+ * @returns 静态 HTML。
+ */
+function renderPriceCard(entry, overrides = {}) {
+  return render(react.createElement(clientExports.PriceCard, {
+    entry,
+    badge: '内置',
+    t,
+    ...overrides,
+  }))
+}
+
+/** 渲染条目编辑表单。 */
+function renderEntryEditor(overrides = {}) {
+  return render(react.createElement(clientExports.EntryEditor, {
+    entry: FILE_ENTRY,
+    index: 0,
+    scheduleNames: ['deepseek'],
+    routes: [
+      {
+        id: 'deepseek-official',
+        name: 'DeepSeek',
+        models: [{ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }, { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' }],
+      },
+      { id: 'my-gateway', name: 'My Gateway', models: [{ id: 'glm-5', name: 'GLM-5' }] },
+    ],
+    onOverlayToggle: () => {},
+    t,
+    onChange: () => {},
+    onRemove: () => {},
+    onCollapse: () => {},
+    ...overrides,
+  }))
 }
 
 /** 构造一个捕获 slot 注册的客户端上下文替身。 */
@@ -942,10 +990,8 @@ test('computeView 把未定价模型单独标记且不计入合计', () => {
 })
 
 test('内置价目按「四列价格 + 高峰/空闲两行」的表格排版', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, { t, pricing: fakePricing() }))
+  // 条目列表默认按供应商折叠，因此直接渲染卡片本身。
+  const html = renderPriceCard(SPLIT_BUILTIN)
   assert.match(html, /tf_priceTable/)
   assert.match(html, /缓存未命中<\/span><span class="tf_priceHead">缓存命中<\/span><span class="tf_priceHead">缓存写入<\/span><span class="tf_priceHead">输出<\/span>/)
   assert.match(html, /<span class="tf_priceRowLabel">高峰<\/span>(<span class="tf_priceValue">[^<]*<\/span>){4}/)
@@ -955,10 +1001,7 @@ test('内置价目按「四列价格 + 高峰/空闲两行」的表格排版', (
 })
 
 test('不区分峰谷的条目只渲染一行价格', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, { t, pricing: fakePricing({ builtin: [FLAT_BUILTIN] }) }))
+  const html = renderPriceCard(FLAT_BUILTIN)
   assert.match(html, /<span class="tf_priceRowLabel">单价<\/span><span class="tf_priceValue">[^<]*3[.,]00[^<]*\/M<\/span>/)
   assert.doesNotMatch(html, /tf_priceRowLabel">高峰/)
   assert.doesNotMatch(html, /tf_priceRowLabel">空闲/)
@@ -1054,7 +1097,7 @@ test('分组默认展开，折叠后内容不再渲染', () => {
   assert.match(closed, /tf_providerToggle/)
 })
 
-test('编辑器把自定义条目按供应商折叠', () => {
+test('编辑器把自定义条目按供应商分组、排序，且默认折叠', () => {
   // 故意乱序给：渲染出来必须按供应商、模型名排好。
   const three = [
     { ...FILE_ENTRY, id: 'e1', provider: 'zeta', model: 'm2' },
@@ -1073,9 +1116,13 @@ test('编辑器把自定义条目按供应商折叠', () => {
   assert.match(html, /<span class="tf_providerName">alpha<\/span>/)
   assert.match(html, /<span class="tf_providerCount">2 条<\/span>/)
   assert.match(html, /<span class="tf_providerCount">1 条<\/span>/)
-  // 分组按供应商名升序，组内按模型名升序。
+  // 分组按供应商名升序。
   assert.ok(html.indexOf('tf_providerName">alpha') < html.indexOf('tf_providerName">zeta'), 'alpha 应排在 zeta 之前')
-  assert.ok(html.indexOf('zeta / m1') < html.indexOf('zeta / m2'), '组内应按模型名排序')
+  // **默认折叠**：只给出「供应商 · 条数」，卡片内容不渲染。
+  assert.doesNotMatch(html, /zeta \/ m1/, '默认折叠时不该渲染条目卡片')
+  assert.doesNotMatch(html, /alpha \/ m9/)
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /data-collapsed="true"/)
 })
 
 test('只读区把内置条目按供应商列出', async () => {
@@ -1089,14 +1136,17 @@ test('只读区把内置条目按供应商列出', async () => {
     t,
     pricing: fakePricing({ builtin: hostPricing.BUILTIN_PRICING }),
   }))
+  // 分组默认折叠，因此这里看到的是「供应商 · 条数」。
   assert.match(html, /<span class="tf_providerName">deepseek-official<\/span>/)
   assert.doesNotMatch(html, /<span class="tf_providerName">deepseek-account<\/span>/, '账号路由不再单列')
   assert.match(html, /<span class="tf_providerCount">2 条<\/span>/)
-  assert.match(html, /deepseek-official \/ deepseek-flash/)
-  assert.match(html, /deepseek-official \/ deepseek-v4-pro/)
-  // 条目说明里点出它同时覆盖账号路由，否则用户会以为账号侧没价。
-  assert.match(html, /DeepSeek 账号/)
-  assert.doesNotMatch(html, /未配置价格/)
+  // 卡片本身（展开后才渲染）：两条模型，说明里点出它同时覆盖账号路由，
+  // 否则用户会以为账号侧没价。
+  const cards = hostPricing.BUILTIN_PRICING.map(item => renderPriceCard(item)).join('')
+  assert.match(cards, /deepseek-official \/ deepseek-flash/)
+  assert.match(cards, /deepseek-official \/ deepseek-v4-pro/)
+  assert.match(cards, /DeepSeek 账号/)
+  assert.doesNotMatch(cards, /未配置价格/)
 })
 
 test('时区使用带 UTC 偏移的下拉框', () => {
@@ -1185,45 +1235,39 @@ test('空白价格按 0 处理且不算修正', () => {
 })
 
 test('provider 与 model 使用可输入的组合框，而不是原生 datalist', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, {
-    t,
-    pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }] }),
-  }))
-  // 收敛态是只读卡片：与内置条目同一形态，带「编辑」按钮。
-  assert.doesNotMatch(html, /<datalist/)
-  assert.match(html, /tf_priceTable/)
-  assert.match(html, />编辑</)
-  assert.doesNotMatch(html, /tf_combo/)
+  // 条目列表默认折叠，因此直接渲染不该出现组合框的那两种形态。
+  const card = renderPriceCard({ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }, {
+    badge: '自定义 · 统一单价',
+    actions: react.createElement('button', { type: 'button', className: 'tf_editStub' }, '编辑'),
+  })
+  assert.doesNotMatch(card, /<datalist/)
+  assert.match(card, /tf_priceTable/)
+  assert.match(card, />编辑</)
+  assert.doesNotMatch(card, /tf_combo/)
+  // 编辑态才出现组合框（可输入，不是原生 datalist）。
+  const editor = renderEntryEditor({ entry: { ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' } })
+  assert.doesNotMatch(editor, /<datalist/)
+  assert.match(editor, /tf_combo/)
+  assert.match(editor, /tf_comboInput/)
 })
 
 test('组合框只在展开编辑后出现', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  // 通过条目区的「编辑」按钮进入编辑态：这里直接驱动组件内部状态不可行，
-  // 改为断言收敛态与编辑态的控件集合互斥。
-  const collapsed = render(react.createElement(section.component, {
-    t,
-    pricing: fakePricing({ fileEntries: [{ ...FILE_ENTRY, provider: 'not-configured', model: '' }] }),
-  }))
+  // 收敛态（只读卡片）与编辑态的控件集合互斥。
+  const collapsed = renderPriceCard({ ...FILE_ENTRY, provider: 'not-configured', model: '' })
   assert.doesNotMatch(collapsed, /tf_combo/)
   assert.match(collapsed, /tf_priceTable/)
+  assert.match(renderEntryEditor({ entry: { ...FILE_ENTRY, provider: 'not-configured', model: '' } }), /tf_combo/)
 })
 
 test('缺少路由建议时仍可自由输入', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, {
-    t,
-    pricing: fakePricing({ routes: [], fileEntries: [FILE_ENTRY] }),
-  }))
-  // 没有路由建议不影响收敛态卡片；输入框本身是自由文本，不受候选限制。
-  assert.match(html, /tf_priceTable/)
-  assert.match(html, /deepseek-official \/ deepseek-flash/)
+  // 没有路由建议不影响编辑表单：输入框本身是自由文本，不受候选限制。
+  const html = renderEntryEditor({ routes: [], entry: FILE_ENTRY })
+  assert.match(html, /tf_combo/)
+  assert.match(html, /value="deepseek-official"/)
+  assert.match(html, /value="deepseek-flash"/)
+  // 收敛态卡片照旧。
+  assert.match(renderPriceCard(FILE_ENTRY), /tf_priceTable/)
+  assert.match(renderPriceCard(FILE_ENTRY), /deepseek-official \/ deepseek-flash/)
 })
 
 test('保存键位于编辑器顶部而非页面底部', () => {
@@ -1256,18 +1300,14 @@ test('币种与峰谷规则都是下拉框，选项带本地化名称', () => {
 })
 
 test('已保存的自定义条目按内置条目的格式呈现', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  // 清空内置条目，让断言只面对自定义卡片本身。
-  const html = render(react.createElement(section.component, {
-    t,
-    pricing: fakePricing({
-      builtin: [],
-      fileEntries: [{ ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' }],
-    }),
-  }))
   // 与内置卡片同构：标题行 + 四列单价表 + 页脚操作位。
+  const html = renderPriceCard(
+    { ...FILE_ENTRY, provider: 'my-gateway', model: 'glm-5' },
+    {
+      badge: '自定义 · 统一单价',
+      actions: react.createElement('button', { type: 'button', className: 'tf_editStub' }, '编辑'),
+    },
+  )
   assert.match(html, /my-gateway \/ glm-5/)
   assert.match(html, /tf_priceTable/)
   assert.match(html, /tf_cardFoot/)
@@ -1278,25 +1318,16 @@ test('已保存的自定义条目按内置条目的格式呈现', () => {
 })
 
 test('区分峰谷的自定义条目渲染两行并标注', () => {
-  const { ctx, registrations } = fakeClientContext()
-  clientExports.apply(ctx)
-  const section = registrations.find(row => row.options.name === 'settings.section')
-  const html = render(react.createElement(section.component, {
-    t,
-    pricing: fakePricing({
-      fileSchedules: { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
-      fileEntries: [{
-        ...FILE_ENTRY,
-        provider: 'my-gateway',
-        model: 'glm-5',
-        schedule: 'mine',
-        prices: {
-          peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
-          offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
-        },
-      }],
-    }),
-  }))
+  const html = renderPriceCard({
+    ...FILE_ENTRY,
+    provider: 'my-gateway',
+    model: 'glm-5',
+    schedule: 'mine',
+    prices: {
+      peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+      offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+    },
+  }, { badge: '自定义 · 区分峰谷' })
   assert.match(html, /自定义 · 区分峰谷/)
   assert.match(html, /tf_priceRowLabel">高峰/)
   assert.match(html, /tf_priceRowLabel">空闲/)
@@ -1438,7 +1469,8 @@ test('峰谷规则区列出内置与自定义规则，收敛成摘要卡片', ()
   assert.match(html, /<span class="tf_entryName">mine<\/span><span class="tf_entryScope">自定义规则<\/span>/)
   assert.match(html, /<p class="tf_ruleSummary">Asia\/Shanghai · 周一 至 周五 · 09:00–12:00、14:00–18:00<\/p>/)
   assert.match(html, /<p class="tf_ruleSummary">UTC · 周一 · 00:00–06:00<\/p>/)
-  assert.equal(html.split('>编辑<').length - 1, 3, '一个条目 + 两条规则各有一个编辑键')
+  // 条目分组默认折叠，因此这里只见两张规则卡片各自的「编辑」键。
+  assert.equal(html.split('>编辑<').length - 1, 2, '两张规则卡片各有一个编辑键')
   assert.doesNotMatch(html, /tf_ruleName/, '收敛态没有改名输入框')
   assert.doesNotMatch(html, /tf_iconButton/, '收敛态没有删除键')
 })
@@ -1997,8 +2029,107 @@ test('computeView 单独统计 flat 行，且只在条目已有峰谷价时提�
   assert.equal(view.amount, 0.003)
 })
 
-test('明细面板把「未记录时段」的用量说出来', () => {
-  const rows = [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'flat', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }]
+/** 明细面板里一个模型行的替身。 */
+function fakeModelItem(overrides = {}) {
+  return {
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+    tokens: 1_000_000,
+    buckets: { input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+    amounts: { input: 2, cacheRead: 0, cacheWrite: 0, output: 0 },
+    amount: 2,
+    priced: true,
+    entry: SPLIT_BUILTIN,
+    flatTokens: 0,
+    currency: 'CNY',
+    ...overrides,
+  }
+}
+
+test('明细面板的模型卡片默认折叠，只给总量与费用', () => {
+  const html = render(react.createElement(clientExports.ModelCard, {
+    item: fakeModelItem(), currency: 'CNY', t, expanded: false, onToggle: () => {},
+  }))
+  // 默认只露出「模型 · 总 token · 费用」。
+  assert.match(html, /class="tf_cardToggle"/)
+  assert.match(html, /aria-expanded="false"/)
+  assert.match(html, /data-collapsed="true"/)
+  assert.match(html, /1M token/)
+  assert.match(html, /tf_cardAmount/)
+  // 分桶明细不渲染。
+  assert.doesNotMatch(html, /tf_rows/)
+  assert.doesNotMatch(html, /tf_rowLabel/)
+  // 没有徽章时连容器都不渲染：空的 inline-flex 会生成行盒，把折叠卡片底部撑出
+  // 一整块空白，表头看着也就没居中。
+  assert.doesNotMatch(html, /tf_badges/)
+})
+
+test('模型卡片展开后才给出分桶明细', () => {
+  const html = render(react.createElement(clientExports.ModelCard, {
+    item: fakeModelItem(), currency: 'CNY', t, expanded: true, onToggle: () => {},
+  }))
+  assert.match(html, /aria-expanded="true"/)
+  assert.doesNotMatch(html, /data-collapsed/)
+  assert.match(html, /tf_rows/)
+  assert.match(html, /tf_rowLabel">缓存未命中/)
+  // 中性身份徽章随明细出现。
+  assert.match(html, /区分峰谷/)
+})
+
+test('折叠态仍显示警示徽章', () => {
+  // 未记录时段与未配置价格关乎账单准不准，不能藏在一次点击之后。
+  const flat = render(react.createElement(clientExports.ModelCard, {
+    item: fakeModelItem({ flatTokens: 500_000 }), currency: 'CNY', t, expanded: false, onToggle: () => {},
+  }))
+  assert.match(flat, /data-warn="true"/)
+  assert.match(flat, /500K 未记录时段/)
+  // 有徽章时才渲染容器。
+  assert.match(flat, /tf_badges/)
+  // 中性徽章随明细一起收起。
+  assert.doesNotMatch(flat, /区分峰谷/)
+
+  const unpriced = render(react.createElement(clientExports.ModelCard, {
+    item: fakeModelItem({ priced: false, entry: null, amount: 0 }), currency: 'CNY', t, expanded: false, onToggle: () => {},
+  }))
+  assert.match(unpriced, /data-warn="true"/)
+  assert.match(unpriced, /缺少价目条目/)
+})
+
+test('明细的供应商行也按币种分别累加', () => {
+  // 只有外币用量的供应商，旧实现只累加展示币种，那一行会显示成 ¥0.00——
+  // 看上去就是「供应商行只显示人民币」。
+  const view = clientExports.computeView({ rows: MIXED_USAGE_ROWS }, [SPLIT_BUILTIN, USD_ENTRY], 'CNY', {})
+  const gateway = view.groups.find(group => group.provider === 'my-gateway')
+  assert.deepEqual(gateway.totals, [{ currency: 'USD', amount: 1 }])
+  assert.equal(gateway.amount, 0, '展示币种合计仍为 0，但并列合计里有美元')
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view, exchangeRates: {}, t, pricingError: null, onConfigure: () => {},
+  }))
+  const meta = /tf_groupName">my-gateway<\/span><span class="tf_groupMeta">([^<]*)</.exec(html)
+  assert.ok(meta !== null, '应有 my-gateway 的供应商行')
+  // 币种符号与小数分隔符随 locale 变化，因此只断言「出现了非零数字」。
+  assert.match(meta[1], /[1-9]/, `供应商行不该是零：${meta[1]}`)
+})
+
+test('同一供应商下有两种币种时，供应商行并列显示', () => {
+  const entries = [
+    { id: 'cny', provider: 'mixed', model: 'a', currency: 'CNY', prices: { peak: { input: 2, cacheRead: 0, cacheWrite: 0, output: 8 } } },
+    { id: 'usd', provider: 'mixed', model: 'b', currency: 'USD', prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 4 } } },
+  ]
+  const rows = [
+    { provider: 'mixed', model: 'a', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+    { provider: 'mixed', model: 'b', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+  ]
+  const plain = clientExports.computeView({ rows }, entries, 'CNY', {})
+  assert.deepEqual(plain.groups[0].totals, [{ currency: 'CNY', amount: 2 }, { currency: 'USD', amount: 1 }])
+  // 与总计同一条判据：缺任一外币汇率就不给折算合计。
+  assert.equal(plain.groups[0].convertedAmount, null)
+  const converted = clientExports.computeView({ rows }, entries, 'CNY', { USD: 7.2 })
+  assert.equal(converted.groups[0].convertedAmount, 2 + 1 * 7.2)
+  assert.deepEqual(converted.groups[0].totals, plain.groups[0].totals)
+})
+
+test('明细面板把「未记录时段」的用量说出来', () => {  const rows = [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'flat', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }]
   const view = clientExports.computeView({ rows }, [SPLIT_BUILTIN], 'CNY')
   const html = render(react.createElement(clientExports.FeeDetail, { view, t, pricingError: null, onConfigure: () => {} }))
   assert.match(html, /tf_badge" data-warn="true">1M 未记录时段</)

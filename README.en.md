@@ -72,7 +72,7 @@ All three paths merge the host half into the profile's bundle layer — this pac
 
 - **Cost pill**: sits under the composer beside the built-in "turns / speed" and "token usage" pills. It shows an amount such as `¥0.12`; when the session also contains models with no configured price, it notes how many.
 - **Billing mode**: the amount is followed by the billing mode of the model currently in use. A single unit price shows `· 计费模式：统一`; with an off-peak price configured it shows `· 计费模式：峰谷 · 当前时段：高峰 · 剩余时间：01:22:32`, where the countdown refreshes every second down to the next period switch. The mode comes from the latest request's route in the projection, so switching models updates it immediately.
-- **Cost breakdown**: opened by clicking the pill. The total sits at the top, followed by groups per provider listing each model's token counts and amounts across the four billing buckets. Entries with peak/off-peak pricing are marked "Peak/off-peak".
+- **Cost breakdown**: opened by clicking the pill. The total sits at the top, followed by groups per provider; **each model shows only its total token count and cost until you click it**, which reveals the token count and amount for each of the four billing buckets. Entries with peak/off-peak pricing are marked "Peak/off-peak". Warning badges (usage without a period, no matching entry) stay visible while collapsed, because they bear on whether the bill is right and should not hide behind a click.
 - **Pricing**: the panel's second tab, or the "Token fee" page in dsh settings.
 
 ## Pricing configuration

@@ -45,7 +45,7 @@
 
 价目条目各带 `currency`，因此同一个会话里可能同时存在人民币与美元用量。插件**不做任何外发请求**，也不会硬编码一个会过期的汇率，所以分两层处理：
 
-1. **并列显示（始终生效）**：胶囊、合计与明细都按币种分别列出并各自累加，形如 `¥1.23 + US$0.56`。展示币种排在前面，其余按金额降序。任何币种的用量都不会被丢掉。
+1. **并列显示（始终生效）**：胶囊、合计、明细里的**每个供应商行**与每个模型各自按币种累加，形如 `¥1.23 + US$0.56`。展示币种排在前面，其余按金额降序。任何币种的用量都不会被丢掉——只按展示币种累加的话，一个只跑过美元路由的供应商会在那一行显示成 `¥0.00`。模型行只有一种币（一条条目一种币），因此它显示的本来就是自己的币种。
 2. **折算合计（需要你配汇率）**：在插件配置里写了 `exchangeRates` 之后，再额外给出一个折算成展示币种的合计，形如 `≈ ¥5.26`。用 `≈` 而不是 `=`，因为那是按你给的汇率算出来的参考值，不是任何一方的实际入账金额。
 
 **只要有一种外币没有配汇率，就不给折算合计**——半个合计比没有合计更危险：它看起来像「全部算完了」，实际漏掉了一种币。明细会点名缺汇率的币种。
@@ -99,7 +99,7 @@
 
 ### 按供应商折叠
 
-价目条目（自定义与只读内置两段都是）**按供应商分组**，每组一个整宽的表头，写着供应商 id、该组条目数与一个折叠箭头。**默认全部展开**——条目少时先折叠只是多一次点击；条目多起来之后这一层才用来把列表收短。
+价目条目（自定义与只读内置两段都是）**按供应商分组**，每组一个整宽的表头，写着供应商 id、该组条目数与一个折叠箭头。**默认全部折叠**：先给一张「供应商 · 条数」的清单，要看具体条目再展开——条目一多，一屏铺开的卡片反而更难扫。
 
 **列表按供应商、模型名的首字母排序**，组内同理。比较忽略大小写（`alpha` 排在 `Beta` 前），但**分组按原样**——provider id 大小写敏感，`Beta` 与 `beta` 是两条不同的路由，不会被并成一组。用码位而不是 `localeCompare` 比较：列表顺序不该随运行环境的 locale 变化，否则同一份配置在两台机器上看到的顺序会不一样。
 
@@ -107,12 +107,17 @@
 
 几条细节：
 
-- **组序取供应商首次出现的位置**，组内保持原顺序，因此新增或编辑条目都不会让已有条目跳位。折叠只影响呈现，数据结构不动——编辑与删除仍按条目在原始数组里的下标回写。
-- **正在编辑的条目所在分组强制展开**：否则点了「编辑」却看不到表单，用户只会以为按钮坏了。折叠的意图让位于正在进行的编辑。
+- **正在编辑的条目所在分组强制展开**：否则点了「编辑」或「新增条目」却看不到表单，用户只会以为按钮坏了。折叠的意图让位于正在进行的编辑。
 - 表头是**按钮**而不是装饰性标题：折叠是交互，得能用键盘触发，`aria-expanded` 与实际状态始终一致。
-- `provider` 还没填的新条目自成一组，表头显示「（未填供应商）」。
+- `provider` 还没填的新条目自成一组，表头显示「（未填供应商）」；它同时处在编辑态，所以那一组会被强制展开。
 - **点「新增条目」时新条目排在第一位**，不是追加到最后：它的 `provider` / `model` 都是空的，本来就该在最显眼处填写；条目一多，追加到末尾会让人还得往下滚才能找到那个刚出现的编辑框。顺序同时决定同优先级通配条目的匹配顺序（先出现的胜出），因此排在最前也符合「刚加的优先」。
 - 自定义条目与只读内置条目各折各的，即使两段里有同名供应商。
+
+### 明细面板按模型折叠
+
+费用明细面板里，**每个模型默认只显示模型名、总 token 数与费用**，点一下才展开四个计费桶各自的 token 数与金额。一个会话常有十几个模型，先摆出总量、要看细节再展开，面板一打开就能扫完总额。
+
+折叠时仍会显示**警示**徽章（未记录时段、缺少价目条目）：它们关乎账单准不准，不该藏在一次点击之后。中性的身份徽章（区分峰谷、通配条目）随明细一起收起，因为它们只是补充说明。
 
 ### 建议列表
 
@@ -240,7 +245,7 @@ Config is validated **at load time**: unknown keys, a misspelled currency and st
 
 Every pricing entry carries its own `currency`, so one session can mix, say, CNY and USD usage. The plugin **makes no outbound requests** and will not hard-code an exchange rate that goes stale, so it handles this in two layers:
 
-1. **Side by side (always on)**: the pill, the total and the breakdown list each currency separately and accumulate it independently, as in `¥1.23 + US$0.56`. The display currency comes first and the rest follow by amount, largest first. No currency's usage is dropped.
+1. **Side by side (always on)**: the pill, the total, **each provider row** in the breakdown and each model accumulate per currency independently, as in `¥1.23 + US$0.56`. The display currency comes first and the rest follow by amount, largest first. No currency's usage is dropped — accumulating by display currency alone would show `¥0.00` on the row of a provider that only ever ran a USD route. A model row has a single currency (one currency per entry), so it already shows its own.
 2. **Converted total (needs your rates)**: once `exchangeRates` is configured, the plugin additionally gives one total converted into the display currency, as in `≈ ¥5.26`. It uses `≈` rather than `=` because that figure comes from the rates you supplied — it is a reference, not an actual charge from either side.
 
 **If any foreign currency has no rate, no converted total is shown at all** — half a total is more dangerous than no total: it looks finished while quietly missing a currency. The breakdown names the currencies that lack a rate.
@@ -294,7 +299,7 @@ The panel's "Pricing" tab and the "Token fee" page in dsh settings use the same 
 
 ### Folded by provider
 
-Pricing entries — in both the custom and the read-only built-in section — are **grouped by provider**, each group with a full-width header showing the provider id, that group's entry count and a collapse caret. **All groups start expanded**: with few entries folding first would only cost a click, so the layer is there to shorten the list once it grows.
+Pricing entries — in both the custom and the read-only built-in section — are **grouped by provider**, each group with a full-width header showing the provider id, that group's entry count and a collapse caret. **All groups start collapsed**: you get a "provider · count" list first and expand the one you care about — once the list grows, a screenful of open cards is harder to scan, not easier.
 
 **The list is sorted by provider and then model name**, and so are the entries inside a group. Comparison ignores case (`alpha` before `Beta`), but **grouping does not** — provider ids are case-sensitive, so `Beta` and `beta` are two different routes and are never merged. Comparison is by code unit rather than `localeCompare`: list order must not shift with the runtime locale, or the same configuration would look different on two machines.
 
@@ -302,11 +307,17 @@ Pricing entries — in both the custom and the read-only built-in section — ar
 
 A few details:
 
-- **A group holding the entry being edited is forced open**: otherwise clicking "Edit" would show no form and the user would think the button was broken. The intent to fold yields to an edit in progress.
+- **A group holding the entry being edited is forced open**: otherwise clicking "Edit" or "Add entry" would show no form and the user would think the button was broken. The intent to fold yields to an edit in progress.
 - The header is a **button**, not a decorative title: folding is an interaction and has to be keyboard-reachable, so `aria-expanded` always matches the real state.
-- A new entry whose `provider` is still empty forms its own group, headed "(no provider yet)".
+- A new entry whose `provider` is still empty forms its own group, headed "(no provider yet)"; it is also in edit mode, so that group is forced open.
 - **Clicking "Add entry" puts the new entry first**, not last: its `provider` / `model` are empty and belong where they are most visible, and with a long list appending would force a scroll to find the edit box that just appeared. Order also decides matching among wildcard entries of the same priority (the earlier one wins), so being first matches the intuition that the entry you just added takes precedence.
 - Custom and read-only built-in entries fold independently, even when both contain the same provider.
+
+### The breakdown folds per model
+
+In the cost breakdown, **each model shows only its name, total token count and cost** until you click it, which reveals the token count and amount for each of the four billing buckets. A session often spans a dozen models, so leading with the totals keeps the panel scannable the moment it opens.
+
+Collapsed cards still show **warning** badges (usage without a period, no matching entry) — they bear on whether the bill is right and should not hide behind a click. Neutral identity badges (peak/off-peak, wildcard entry) fold away with the detail, since they are only annotations.
 
 ### Suggestions
 
