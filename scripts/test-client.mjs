@@ -2041,6 +2041,49 @@ test('两侧的时段判定与倒计时一致', async () => {
   }
 })
 
+test('连休假期里两侧都还能算出下一次切换（倒计时不消失）', async () => {
+  // 回归：客户端把逐日推进上限写死成 8 天，而 host 在有节假日例外时放宽到 32 天
+  // （0.4.0 修「长假期倒计时消失」时只改了一侧）。2026 年春节连休 9 天，从节前
+  // 最后一个高峰窗口结束起，客户端在 8 天内找不到下一次切换，胶囊上的「剩余时间」
+  // 整段消失；host 却能算出 10 天后那次高峰。
+  const hostPricing = await import('../lib/pricing.js')
+  const raw = {
+    id: 'split',
+    provider: 'my-gateway',
+    model: 'glm-5',
+    currency: 'CNY',
+    schedule: {
+      timezone: 'Asia/Shanghai',
+      peakDays: [1, 2, 3, 4, 5],
+      peakWindows: [['09:00', '12:00'], ['14:00', '18:00']],
+      // 周一 2026-02-16 起连休 9 天：节前最后一个高峰是 2/13（周五）18:00 结束，
+      // 下一次高峰要等到 2/25（周三）09:00，间隔约 11.6 天。
+      holidays: [
+        '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20',
+        '2026-02-21', '2026-02-22', '2026-02-23', '2026-02-24',
+      ],
+    },
+    prices: {
+      peak: { input: 2, cacheRead: 0.04, cacheWrite: 0, output: 8 },
+      offPeak: { input: 1, cacheRead: 0.02, cacheWrite: 0, output: 4 },
+    },
+  }
+  const host = hostPricing.normalizeEntry(raw)
+  const start = Date.parse('2026-02-13T00:00:00+08:00')
+  const end = Date.parse('2026-02-26T00:00:00+08:00')
+  let inHoliday = 0
+  for (let at = start; at <= end; at += 3_600_000) {
+    const mine = clientExports.tariffStateAt(raw, at)
+    assert.deepEqual(mine, hostPricing.tariffStateAt(host, at), `时刻 ${new Date(at).toISOString()} 两侧结果应一致`)
+    // 假期里必须仍能给出下一次切换，否则胶囊没有倒计时可显示。
+    if (at >= Date.parse('2026-02-16T00:00:00+08:00') && at <= Date.parse('2026-02-24T23:59:59+08:00')) {
+      assert.notEqual(mine.remainingMs, null, `假期内 ${new Date(at).toISOString()} 应仍有下一次切换`)
+      inHoliday += 1
+    }
+  }
+  assert.ok(inHoliday > 150, `应覆盖假期内的大量时刻，实际 ${inHoliday}`)
+})
+
 test('两侧的时段归属兜底一致（都落到 flat）', async () => {
   // 兜底值决定「还没配置价格」的用量被记成什么，两侧不一致会让浏览器按一套规则
   // 计价、host 按另一套分桶。
