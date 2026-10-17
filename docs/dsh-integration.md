@@ -8,9 +8,9 @@
 
 ## 版本兼容
 
-核对范围是 `dsh-v0.1.5-rc.1` 到 `dsh-v0.1.7-rc.1` 之间的 8 个 tag（`0.1.5-rc.1/rc.2/rc.3`、`0.1.6-alpha.1/alpha.2`、`0.1.7-alpha.1/alpha.2/rc.1`），并在 **`dsh-v0.1.7-rc.2`、`dsh-v0.2.0-rc.1`、`dsh-v0.2.0-rc.2`** 上对同一组契约面做了复核对。上游从 `0.1.6-alpha.2` 到 `0.2.0-rc.2` 之间改动很大（`0.1.7-rc.1`（当前 GUI 基线）→`0.2.0-rc.2` 有 794 个提交、1155 个文件），但**本插件依赖的表面全部没有变**：图标导出名、`conversation.composer.dock` 的 `{ kind: 'list', scope: 'session' }`、`Menu`/`Button` 的导出与 props、`--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter` 这些设计 token、`useProjection` 标准座位、以及 host 侧的 `sessionProjections.register`、`ctx.inject`、`ctx.get('llm')`、`ctx.webServer.register`、`ctx.locale.register`、`settings.section` 与 `ctx.slots.inject`——逐一在 `dsh-v0.2.0-rc.2` 上确认存在，`Menu`/`Button` 的 props 接口还与 `0.1.7-rc.1` 逐字一致。
+核对范围是 `dsh-v0.1.5-rc.1` 到 `dsh-v0.1.7-rc.1` 之间的 8 个 tag（`0.1.5-rc.1/rc.2/rc.3`、`0.1.6-alpha.1/alpha.2`、`0.1.7-alpha.1/alpha.2/rc.1`），并在 **`dsh-v0.1.7-rc.2`、`dsh-v0.2.0-rc.1`、`dsh-v0.2.0-rc.2`**，以及 0.2.1 线上的 **`alpha.1`–`alpha.5`、`rc.1`、`rc.2`** 上对同一组契约面做了复核对（0.2.1 线共 7 个 tag）。上游从 `0.1.6-alpha.2` 到 `0.2.1-rc.2` 之间改动很大（`0.1.7-rc.1`→`0.2.0-rc.2` 就有 794 个提交、1155 个文件），但**本插件依赖的表面全部没有变**：图标导出名、`conversation.composer.dock` 的 `{ kind: 'list', scope: 'session' }`、`Menu`/`Button` 的导出与 props、`--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter` 这些设计 token、`useProjection` 标准座位、以及 host 侧的 `sessionProjections.register`、`ctx.inject`、`ctx.get('llm')`、`ctx.webServer.register`、`ctx.locale.register`、`settings.section` 与 `ctx.slots.inject`——逐一在每个 tag 上确认存在，`Menu`/`Button` 的 props 接口还与 `0.1.7-rc.1` 逐字一致。`package.json` 里 `dsh.client.inject` 声明的 6 个宿主包在 0.2.1-rc.2 上也全部还在。
 
-因此**没有出现第三条版本边界**。
+0.2.1 线带来两条**新的版本边界，但都是视觉层面的**（见下表）：官方统计胶囊拆成两条 dock 条目、胶囊圆角由全圆角改为 `--dsw-radius-sm`。**没有任何一条会打断插件**——胶囊仍照旧独立占一条 dock 条目，dock 的行布局也没变。
 
 **全程稳定的契约面**（8 个 tag 逐个核对）：
 
@@ -22,16 +22,20 @@
 | `Menu` / `Button` 导出与 props | 一直在（`Menu` 的 `items`/`footer`/`selectedId`/`portal`/`getAnchorRect` 等未变） |
 | `--dsw-elevation-prominent`、`--dsw-elevation-stroke-color` | 一直有定义 |
 
-**只有两条版本边界**，两处都做成了按可用性回退或按规范降级，**不做版本分支**——浏览器侧拿不到 DSH 版本号：
+**一共四条版本边界**，两处按可用性回退或按规范降级，两处是纯视觉变化且其中之一有意不跟随（下述）——**全程不做版本分支**，因为浏览器侧拿不到 DSH 版本号：
 
 | 边界 | 变化 | 本插件的应对 |
 | --- | --- | --- |
 | `0.1.6-alpha.2` | `conversation.composer.dock` 从纵向容器变成一行 flex（`.dock`） | 根节点只做与官方 `StatsPills.root` 同规格的收缩节点，不写宽度与内距（v0.2.2） |
 | `0.1.7-alpha.1` | 图标改名；`--dsw-specific-menu` 由不透明变半透明 | 图标按名字可用性回退；菜单表面配对毛玻璃，吸顶控件改用不透明底色 |
+| `0.2.1-alpha.1` | 官方统计胶囊由「一条 dock 条目里放两枚」拆成**每条目一枚**（`activity` / `usage`，带 `data-composer-stat`） | **无需改动**：插件本来就自占一条条目。`.dock` 容器（`display:flex;justify-content:center;gap:12px`）继续负责行布局，与旧 `.root` 同规格，条目间距仍是 12px；`.tf_root` 上那套收缩节点配方因此变成冗余但无害——不能删，`0.2.0-rc.2` 及更早还需要它 |
+| `0.2.1-alpha.3` | 官方胶囊圆角由 `999px` + `corner-shape: round` 改为 `var(--dsw-radius-sm)`（`8px`） | **有意不跟随**：`--dsw-radius-sm` 在 0.2.0-rc.2 就已存在（两版都是 8px），拿它当版本标记做分支不成立；而 `latest` 仍是 0.2.0-rc.2（官方全圆角），此时改成 8px 反而与同排的官方胶囊不一致。插件保持 `24px`（≈ 全圆角，与 ≤0.2.0 的官方一致）。等 0.2.1 成为 `latest` 时改一行即可 |
 
 ## Slot 与布局
 
 **胶囊与官方统计胶囊同处一行**：0.1.6-alpha.2 起 `conversation.composer.dock` 是一行 flex（`.dock`），slot 的每个 occupant 都是它的直接子项，间距、居中与上边距由 dock 统一负责。本插件因此只把自己的根节点写成与官方 `StatsPills.root` 同规格的收缩节点（不写宽度与内距），绝不改写 InputBar 的布局——把并排改成上下、或反过来，都属于改写承载其他 occupant 的父容器，官方调整结构时会让输入区变形，那是破坏性失败而不只是降级。
+
+0.2.1-alpha.1 起官方把统计胶囊拆成每条目一枚，`.root` 那层行包装随之消失、行布局完全交给 `.dock`（`justify-content:center;gap:12px`，与旧 `.root` 同规格），因此本插件根节点上那套配方**变成冗余但无害**：它是单子项的收缩盒，自身的 `justify-content` 不产生效果，条目间距仍由 dock 的 12px 决定。**不删**——`0.2.0-rc.2` 及更早的官方 `.root` 还在，那套配方在那边仍是必需的。
 
 **胶囊内部的分隔符与官方同规格**：官方 `StatsPills` 把 `·` 放在 `.label` **内部**（同一个 flex 子项），所以两段之间只吃 `.sep` 自己的 `margin:0 6px`；把分隔符做成胶囊的直接子项，两侧会各多付一次 `gap:6px`，同一个点从约 15px 撑到约 27px。本插件因此把金额与各段收进一个 `.tf_text` 分组，分隔符只做它的子项。字色也照抄官方的**结果**：官方 `.sep` 指向 `--dsw-alias-separator-primary`，而该 token 在 DSH 里从未定义，声明在计算值阶段失效后 `color` 继承胶囊自身（静止 `label-tertiary`、悬停 `label-secondary`）——所以这里**不写 `color`**，写死任何一个 token 都会让点不再跟随悬停、也会比官方更淡。
 
@@ -79,9 +83,9 @@ This plugin is a third-party bundle riding on DSH's **pre-stable public interfac
 
 ## Version compatibility
 
-The check covered the eight tags from `dsh-v0.1.5-rc.1` to `dsh-v0.1.7-rc.1` (`0.1.5-rc.1/rc.2/rc.3`, `0.1.6-alpha.1/alpha.2`, `0.1.7-alpha.1/alpha.2/rc.1`), and **re-audited the same contract surfaces on `dsh-v0.1.7-rc.2`, `dsh-v0.2.0-rc.1` and `dsh-v0.2.0-rc.2`**. The upstream change from `0.1.7-rc.1` (the current GUI baseline) to `0.2.0-rc.2` is large — 794 commits and 1155 files — but **every surface this plugin touches stayed put**: the icon export names, `conversation.composer.dock`'s `{ kind: 'list', scope: 'session' }`, the exports and props of `Menu`/`Button`, the design tokens `--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter`, the `useProjection` standard seat, and on the host side `sessionProjections.register`, `ctx.inject`, `ctx.get('llm')`, `ctx.webServer.register`, `ctx.locale.register`, `settings.section` and `ctx.slots.inject` — each confirmed present on `dsh-v0.2.0-rc.2`, with the `Menu`/`Button` props identical to `0.1.7-rc.1` verbatim.
+The check covered the eight tags from `dsh-v0.1.5-rc.1` to `dsh-v0.1.7-rc.1` (`0.1.5-rc.1/rc.2/rc.3`, `0.1.6-alpha.1/alpha.2`, `0.1.7-alpha.1/alpha.2/rc.1`), and **re-audited the same contract surfaces on `dsh-v0.1.7-rc.2`, `dsh-v0.2.0-rc.1`, `dsh-v0.2.0-rc.2` and the seven tags of the 0.2.1 line (`alpha.1`–`alpha.5`, `rc.1`, `rc.2`)**. The upstream change from `0.1.7-rc.1` to `0.2.1-rc.2` is large — `0.1.7-rc.1` to `0.2.0-rc.2` alone is 794 commits and 1155 files — but **every surface this plugin touches stayed put**: the icon export names, `conversation.composer.dock`'s `{ kind: 'list', scope: 'session' }`, the exports and props of `Menu`/`Button`, the design tokens `--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter`, the `useProjection` standard seat, and on the host side `sessionProjections.register`, `ctx.inject`, `ctx.get('llm')`, `ctx.webServer.register`, `ctx.locale.register`, `settings.section` and `ctx.slots.inject` — each confirmed present on every tag, with the `Menu`/`Button` props identical to `0.1.7-rc.1` verbatim. The six host packages declared in `dsh.client.inject` are all still present on 0.2.1-rc.2 as well.
 
-So **no third version boundary appeared**.
+The 0.2.1 line brings **two new boundaries, both visual** (see the table below): the built-in stats pills split into two dock entries, and the pill corner radius went from fully round to `--dsw-radius-sm`. **Neither breaks the plugin** — the pill still occupies a dock entry of its own and the dock's row layout is unchanged.
 
 **Contracts that held throughout** (checked tag by tag):
 
@@ -93,16 +97,20 @@ So **no third version boundary appeared**.
 | `Menu` / `Button` exports and props | Always present (`Menu`'s `items`/`footer`/`selectedId`/`portal`/`getAnchorRect` unchanged) |
 | `--dsw-elevation-prominent`, `--dsw-elevation-stroke-color` | Always defined |
 
-**Only two version boundaries**, and both are handled by availability fallbacks or spec-defined degradation rather than **version branches** — the browser side cannot read the DSH version:
+**Four version boundaries in total.** Two are handled by availability fallbacks or spec-defined degradation; two are purely visual, and one of those is deliberately not followed (below). None uses a **version branch** — the browser side cannot read the DSH version:
 
 | Boundary | Change | Response |
 | --- | --- | --- |
 | `0.1.6-alpha.2` | `conversation.composer.dock` went from a column container to a single flex row (`.dock`) | The root is only a shrink-wrapping node matching the built-in `StatsPills.root`, with no width or padding (v0.2.2) |
 | `0.1.7-alpha.1` | Icons were renamed; `--dsw-specific-menu` went from opaque to translucent | Icons resolve by which name exists; menu surfaces pair with the backdrop filter and sticky controls use an opaque fill |
+| `0.2.1-alpha.1` | The built-in stats went from "two pills inside one dock entry" to **one entry per pill** (`activity` / `usage`, carrying `data-composer-stat`) | **Nothing to do**: the plugin already owns an entry. The `.dock` container (`display:flex;justify-content:center;gap:12px`) still owns the row layout and matches the old `.root`, so the 12px gap between entries is unchanged; the shrink-wrapping recipe on `.tf_root` becomes redundant but harmless — it cannot be deleted, since `0.2.0-rc.2` and earlier still need it |
+| `0.2.1-alpha.3` | The built-in pill's corner radius went from `999px` + `corner-shape: round` to `var(--dsw-radius-sm)` (`8px`) | **Deliberately not followed**: `--dsw-radius-sm` already exists on 0.2.0-rc.2 (8px on both), so it cannot serve as a version marker; and `latest` is still 0.2.0-rc.2 (fully round), where switching to 8px would *diverge* from the built-in pills in the same row. The plugin keeps `24px` (≈ fully round, matching the built-ins on ≤0.2.0). A one-line change once 0.2.1 becomes `latest` |
 
 ## Slots and layout
 
 **The pill shares a row with the built-in stats pills**: since 0.1.6-alpha.2 `conversation.composer.dock` is a single flex row (`.dock`), and every slot occupant is a direct child of it — spacing, centering and the top pad belong to the dock. The plugin therefore only makes its own root a shrink-wrapping node matching the built-in `StatsPills.root` (no width, no padding) and never rewrites the InputBar layout: turning a row into a column, or the reverse, means rewriting the parent that carries other occupants, and a dock structure change would deform the composer — a destructive failure, not a degradation.
+
+Since 0.2.1-alpha.1 the built-in stats are one pill per entry, so that `.root` row wrapper is gone and the row layout falls entirely to `.dock` (`justify-content:center;gap:12px`, the same spec as the old `.root`). The recipe on the plugin's root therefore becomes **redundant but harmless**: it is a shrink box with a single child, its own `justify-content` has no effect, and the 12px gap between entries still comes from the dock. It is **not deleted** — `0.2.0-rc.2` and earlier still ship the built-in `.root`, where the recipe is still required.
 
 **The pill's separators match the built-in spec**: the built-in `StatsPills` puts `·` **inside** `.label` (the same flex item), so the two runs are separated only by `.sep`'s own `margin: 0 6px`; making the separator a direct child of the pill pays the `gap: 6px` twice more, stretching one dot from roughly 15px to roughly 27px. This plugin therefore groups the amount and every part into one `.tf_text`, with the separators as its children. The colour copies the built-in **result** too: the built-in `.sep` points at `--dsw-alias-separator-primary`, a token DSH never defines, so the declaration is invalid at computed-value time and `color` is inherited from the pill (resting `label-tertiary`, hover `label-secondary`) — hence **no `color` here**; pinning any token would stop the dot following hover and leave it fainter than the built-in.
 

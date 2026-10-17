@@ -9,7 +9,7 @@ Live **per-session cost** for the [DeepSeek Harness](https://github.com/deepseek
 
 A cost pill appears under the composer: it shows the current session's spend in CNY by default, rounded to the cent. Clicking it opens a panel that lists, per provider and model, the token counts and amounts for **cache misses, cache hits, cache writes and output**, and lets you edit the pricing table in place.
 
-> Built and verified against DSH `0.1.7-rc.1`, compatible with every release from `0.1.5-rc.1` onwards, with the contract check extended through **`0.2.0-rc.2`** (`0.1.7-rc.2`, `0.2.0-rc.1` and `0.2.0-rc.2` audited one by one; no new version boundary appeared). On `0.1.6-alpha.1` the pill and the stats pills stack instead of sharing a row. The compatibility check is in [`docs/dsh-integration.md`](docs/dsh-integration.md).
+> Built and verified against DSH `0.1.7-rc.1`, compatible with every release from `0.1.5-rc.1` onwards, with the contract check extended through **`0.2.1-rc.2`** (`0.1.7-rc.2`, `0.2.0-rc.1`, `0.2.0-rc.2`, plus `alpha.1`–`alpha.5`, `rc.1` and `rc.2` of the 0.2.1 line, audited one by one). The 0.2.1 line adds two **visual** boundaries (the official stats pills split into two dock entries, and the pill corner radius went from fully round to 8px); every contract surface this plugin relies on is unchanged — see [`docs/dsh-integration.md`](docs/dsh-integration.md). On `0.1.6-alpha.1` the pill and the stats pills stack instead of sharing a row.
 
 ## Features
 
