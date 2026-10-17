@@ -89,11 +89,12 @@ The plugin deliberately ships **no** pricing for other providers: the same model
 
 ### Plugin config (cordis.yml)
 
-The entry's `config` in `cordis.yml` accepts four keys:
+The entry's `config` in `cordis.yml` accepts five keys:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `displayCurrency` | `CNY` | Display currency for the pill and the total; must be an ISO 4217 code ICU recognizes. |
+| `exchangeRates` | none | Conversion rates `{ currency: number }`, meaning one unit of that currency equals how many units of the display currency, for example `{ USD: 7.2 }`. |
 | `pricingFile` | `<DSH_HOME>/token-fee.json` | Path to the user pricing table; a relative path resolves against `DSH_HOME`. |
 | `schedules` | none | Extra or overriding named peak/off-peak schedules. |
 | `pricing` | none | Extra or overriding pricing entries. |
@@ -103,9 +104,13 @@ Config is validated **at load time**: unknown keys, a misspelled currency and st
 ```yaml
 - id: token-fee
   config:
-    displayCurrency: USD
+    displayCurrency: CNY
+    exchangeRates:
+      USD: 7.2
     pricingFile: my-prices.json
 ```
+
+**Multiple currencies**: every pricing entry carries its own `currency`, so one session can mix CNY and USD usage. The pill and the total **always** accumulate per currency side by side (`¥1.23 + US$0.56`) and never drop one; once `exchangeRates` is configured they additionally show one converted total (`≈ ¥5.26`). **If any foreign currency has no rate, no converted total is shown at all** — half a total is more dangerous than none. Details in [`docs/configuration.md`](docs/configuration.md).
 
 ### File format
 
@@ -188,7 +193,7 @@ All figures are CNY per million tokens, taken from DeepSeek's official pricing p
 
 - **The endpoints are unavailable over a remote address**: the pricing endpoints accept loopback origins only. Reaching the GUI over a remote address such as Tailscale makes reads and writes return 403 and the panel show everything as unpriced. Edit `<DSH_HOME>/token-fee.json` directly instead.
 - **The holiday data needs updating every year**: `data/cn-holidays.json` currently covers 2026 only (the State Council's notice for a new year usually lands in the previous November). A year with no data falls back to the natural-weekday decision, so that year's public holidays count as peak.
-- **Cross-currency**: amounts in different currencies are not converted or merged. The pill and the total count the display currency only; other currencies are reported separately in the breakdown.
+- **Cross-currency**: every currency is **always accumulated and shown side by side**, never dropped; folding them into a single total needs `exchangeRates` from you — the plugin makes no outbound requests and will not hard-code a rate that goes stale. A currency without a rate cannot enter the converted total and is named in the breakdown.
 - **The countdown does not carry hours into days**: a long gap across a weekend is shown as total hours (for example `63:00:00`).
 
 > Why these limitations exist, and the design trade-offs behind them, are in [`docs/internals.md`](docs/internals.md).

@@ -241,6 +241,8 @@ const FILE_ENTRY = {
  * @param options.entries - 有效价目表（`data.entries`），供费用换算使用。
  * @param options.fileEntries - 用户文件条目（`data.file.entries`），编辑器草稿的来源。
  * @param options.routes - 已配置路由，供 provider / model 建议使用。
+ * @param options.displayCurrency - 展示币种，默认 `CNY`。
+ * @param options.exchangeRates - 折算汇率表，默认空（只并列、不折算）。
  */
 function fakePricing(options = {}) {
   const fileEntries = options.fileEntries ?? [FILE_ENTRY]
@@ -248,7 +250,8 @@ function fakePricing(options = {}) {
     status: 'ready',
     error: options.error ?? null,
     data: {
-      displayCurrency: 'CNY',
+      displayCurrency: options.displayCurrency ?? 'CNY',
+      exchangeRates: options.exchangeRates ?? {},
       entries: options.entries ?? fileEntries,
       builtin: options.builtin ?? [SPLIT_BUILTIN],
       schedules: {},
@@ -354,6 +357,10 @@ const t = (key, params) => {
     'editor.prices': '单价（每百万 token）',
     'editor.offPeakPrices': '空闲单价（每百万 token）',
     'editor.splitTariff': '区分峰谷',
+    'detail.totalLabel': '合计',
+    'detail.totalExact': '精确金额 {value} · 共 {tokens} tokens',
+    'detail.convertedNote': '外币已按汇率折算：{rates}。折算合计是参考值，不是实际入账金额。',
+    'detail.missingRate': '另有 {value} 未折算进合计：未配置 {codes} 的汇率。在插件配置里加 exchangeRates 即可并入。',
     'editor.listSeparator': '、',
     'settings.intro': '为每个供应商与模型配置 token 单价。',
   }
@@ -1589,8 +1596,81 @@ test('计费模式取自当前路由命中的条目', () => {
   assert.equal(state.remainingMs, 2 * 3_600_000)
 })
 
-test('胶囊在统一单价模型上标注「统一」', () => {
+/** 混合币种用的美元条目：百万未命中输入 1 美元。 */
+const USD_ENTRY = {
+  id: 'custom-usd',
+  provider: 'my-gateway',
+  model: 'glm-5',
+  currency: 'USD',
+  prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 4 } },
+}
+
+/** 一次人民币（2 元）+ 一次美元（1 美元）的用量行。 */
+const MIXED_USAGE_ROWS = [
+  { provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+  { provider: 'my-gateway', model: 'glm-5', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+]
+
+test('浏览器半的多币种视图与 host 半同构', async () => {
+  const hostPricing = await import('../lib/pricing.js')
+  const entries = [SPLIT_BUILTIN, USD_ENTRY]
+  // 未配汇率：并列两种币，折算合计为 null，缺汇率的币种被点名。
+  const plain = clientExports.computeView({ rows: MIXED_USAGE_ROWS }, entries, 'CNY', {})
+  assert.equal(plain.amount, 2)
+  assert.deepEqual(plain.totals, [{ currency: 'CNY', amount: 2 }, { currency: 'USD', amount: 1 }])
+  assert.equal(plain.convertedAmount, null)
+  assert.deepEqual(plain.missingRates, ['USD'])
+  // 与 host 半逐字一致。
+  const host = hostPricing.computeCost(MIXED_USAGE_ROWS, entries, 'CNY')
+  assert.equal(plain.amount, host.amount)
+  assert.deepEqual(plain.totals, host.totals)
+  assert.equal(plain.convertedAmount, host.convertedAmount)
+  assert.deepEqual(plain.missingRates, host.missingRates)
+  // 配了汇率：折算合计出现，原值仍保留。
+  const converted = clientExports.computeView({ rows: MIXED_USAGE_ROWS }, entries, 'CNY', { USD: 7.2 })
+  assert.equal(converted.convertedAmount, 2 + 7.2)
+  assert.deepEqual(converted.missingRates, [])
+  assert.deepEqual(converted.totals, host.totals)
+})
+
+test('胶囊并列显示多币种，而不是只算展示币种', () => {
   const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      rows: MIXED_USAGE_ROWS,
+    }),
+    t,
+    pricing: fakePricing({ entries: [SPLIT_BUILTIN, USD_ENTRY] }),
+  }))
+  const amount = /<span class="tf_amount">([^<]*)<\/span>/.exec(html)
+  assert.ok(amount !== null, '应有金额段')
+  assert.match(amount[1], /\+/, '多币种应并列显示（美元部分此前被丢掉）')
+  assert.doesNotMatch(amount[1], /≈/, '未配汇率时不该出现折算合计')
+})
+
+test('配了汇率后胶囊在并列金额后面给出折算合计', () => {
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
+  const html = render(react.createElement(dock.component, {
+    useProjection: fakeUseProjection({
+      route: { provider: 'deepseek-official', model: 'deepseek-flash' },
+      rows: MIXED_USAGE_ROWS,
+    }),
+    t,
+    pricing: fakePricing({ entries: [SPLIT_BUILTIN, USD_ENTRY], exchangeRates: { USD: 7.2 } }),
+  }))
+  const amount = /<span class="tf_amount">([^<]*)<\/span>/.exec(html)
+  assert.ok(amount !== null, '应有金额段')
+  assert.match(amount[1], /\+/, '仍要并列各币种原值')
+  // 折算合计用 ≈ 标明是参考值，不是任何一方的实际入账金额。
+  assert.match(amount[1], /≈/)
+})
+
+test('胶囊在统一单价模型上标注「统一」', () => {  const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
   const dock = registrations.find(row => row.options.name === 'conversation.composer.dock')
   const html = render(react.createElement(dock.component, {
@@ -1802,6 +1882,45 @@ test('明细面板把「未记录时段」的用量说出来', () => {
   const html = render(react.createElement(clientExports.FeeDetail, { view, t, pricingError: null, onConfigure: () => {} }))
   assert.match(html, /tf_badge" data-warn="true">1M 未记录时段</)
   assert.match(html, /有 1,000,000 tokens 是在峰谷规则生效之前记录的/)
+})
+
+test('明细合计把各币种并列，缺汇率时点名', () => {
+  const view = clientExports.computeView({ rows: MIXED_USAGE_ROWS }, [SPLIT_BUILTIN, USD_ENTRY], 'CNY', {})
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view,
+    exchangeRates: {},
+    t,
+    pricingError: null,
+    onConfigure: () => {},
+  }))
+  // 合计区并列两种币，而不是只写展示币种。
+  const exact = /<div class="tf_totalExact">([^<]*)<\/div>/.exec(html)
+  assert.ok(exact !== null, '应有精确金额行')
+  assert.match(exact[1], /\+/, '精确金额应并列各币种')
+  const value = /<div class="tf_totalValue">([^<]*)<\/div>/.exec(html)
+  assert.ok(value !== null, '应有合计主数字')
+  assert.match(value[1], /\+/, '主数字没有折算合计时退回并列文本')
+  // 折算不出来就不显示 ≈，不能凭空报一个数。
+  assert.doesNotMatch(value[1], /≈/)
+  // 缺汇率的币种被点名，而不是被默默丢掉。
+  assert.match(html, /未配置 USD 的汇率/)
+})
+
+test('明细在配了汇率后给出折算合计并写明汇率', () => {
+  const view = clientExports.computeView({ rows: MIXED_USAGE_ROWS }, [SPLIT_BUILTIN, USD_ENTRY], 'CNY', { USD: 7.2 })
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view,
+    exchangeRates: { USD: 7.2 },
+    t,
+    pricingError: null,
+    onConfigure: () => {},
+  }))
+  // 主数字是折算合计，用 ≈ 标明是参考值。
+  const value = /<div class="tf_totalValue">([^<]*)<\/div>/.exec(html)
+  assert.ok(value !== null, '应有合计主数字')
+  assert.match(value[1], /≈/)
+  // 说明行写明用的是哪条汇率，用户能对账。
+  assert.match(html, /1 USD = 7\.2 CNY/)
 })
 
 test('DeepSeek 账号路由在浏览器半命中它自己的内置条目', async () => {

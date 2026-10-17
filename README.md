@@ -89,11 +89,12 @@ node scripts/install.mjs --check    # 校验既有安装
 
 ### 插件配置（cordis.yml）
 
-`cordis.yml` 里该条目的 `config` 接受四个键：
+`cordis.yml` 里该条目的 `config` 接受五个键：
 
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
 | `displayCurrency` | `CNY` | 胶囊与合计使用的展示币种，必须是 ICU 认识的 ISO 4217 代码。 |
+| `exchangeRates` | 无 | 折算汇率表 `{ 币种: 数值 }`，含义为 1 单位该币种等于多少展示币种，例如 `{ USD: 7.2 }`。 |
 | `pricingFile` | `<DSH_HOME>/token-fee.json` | 用户价目表路径；相对路径按 `DSH_HOME` 解析。 |
 | `schedules` | 无 | 额外或覆盖内置的命名峰谷规则。 |
 | `pricing` | 无 | 额外或覆盖其它层的价目条目。 |
@@ -103,9 +104,13 @@ node scripts/install.mjs --check    # 校验既有安装
 ```yaml
 - id: token-fee
   config:
-    displayCurrency: USD
+    displayCurrency: CNY
+    exchangeRates:
+      USD: 7.2
     pricingFile: my-prices.json
 ```
+
+**多币种**：价目条目各带 `currency`，同一会话里可能既有人民币也有美元用量。胶囊与合计**始终**按币种并列累加（`¥1.23 + US$0.56`），不会丢掉任何一种；配了 `exchangeRates` 之后再额外给出一个折算合计（`≈ ¥5.26`）。**只要有一种外币缺汇率就不给折算合计**——半个合计比没有合计更危险。细节见 [`docs/configuration.md`](docs/configuration.md)。
 
 ### 文件格式
 
@@ -188,7 +193,7 @@ node scripts/install.mjs --check    # 校验既有安装
 
 - **远程访问时端点不可用**：价目表端点只接受回环来源。经 Tailscale 等远程地址访问 GUI 时读写端点返回 403，面板显示「未配置价格」。此时请直接编辑 `<DSH_HOME>/token-fee.json`。
 - **节假日数据要逐年更新**：`data/cn-holidays.json` 目前只覆盖 2026 年（新年度的国务院通知通常在上一年的 11 月发布）。文件里没有的年份会退回「按自然工作日判定」，即该年的法定节假日按高峰价计。
-- **跨币种**：不同币种的金额不会换算合并。胶囊与合计只统计展示币种，其他币种在明细中单独提示。
+- **跨币种**：各币种**始终并列累加显示**，不会丢；但折算成单一合计需要你自己配 `exchangeRates`——插件不做外发请求，也不会硬编码一个会过期的汇率。缺汇率的币种会折算不进合计，并在明细里点名。
 - **倒计时的小时不进位到天**：跨周末的长间隔按总小时数显示（例如 `63:00:00`）。
 
 > 这些限制的成因与设计取舍见 [`docs/internals.md`](docs/internals.md)。

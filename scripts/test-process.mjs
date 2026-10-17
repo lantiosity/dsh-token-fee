@@ -52,6 +52,8 @@ const RESET = `${BASE}/api/token-fee/pricing/reset`
 const ACTION_HEADER = 'x-dsh-token-fee-action'
 const START_TIMEOUT_MS = 120_000
 const PROBE_CURRENCY = 'CNY'
+const PROBE_RATE_CURRENCY = 'USD'
+const PROBE_RATE = 7.2
 
 let passed = 0
 const failures = []
@@ -127,6 +129,9 @@ await writeFile(overlayPath, [
   '- id: token-fee',
   '  config:',
   `    displayCurrency: ${PROBE_CURRENCY}`,
+  // 顺带走一遍真实 cordis 装载路径上的 exchangeRates 校验与快照字段。
+  '    exchangeRates:',
+  `      ${PROBE_RATE_CURRENCY}: ${PROBE_RATE}`,
   `    pricingFile: ${JSON.stringify(pricingFile)}`,
   '',
 ].join('\n'), 'utf8')
@@ -233,6 +238,10 @@ try {
     // 断言的是覆盖生效，而不是用户当前配置碰巧等于它。
     if (body.displayCurrency !== PROBE_CURRENCY) {
       throw new Error(`displayCurrency 覆盖未生效：期望 ${PROBE_CURRENCY}，得到 ${body.displayCurrency}`)
+    }
+    // 汇率同样由 patch 重述：确认它走完 cordis 的 schema 校验后原样进了快照。
+    if (body.exchangeRates?.[PROBE_RATE_CURRENCY] !== PROBE_RATE) {
+      throw new Error(`exchangeRates 未随快照返回：${JSON.stringify(body.exchangeRates)}`)
     }
     // 节假日数据由 `new URL('../data/cn-holidays.json', import.meta.url)` 定位，
     // 这条断言确认它在真实装载路径下解析得到——装错位置或漏进 files 都会在这里露出来。

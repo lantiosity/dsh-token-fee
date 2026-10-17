@@ -42,7 +42,7 @@ projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
 
 - **节假日数据是静态包数据，不随配置热更新**：`data/cn-holidays.json` 由 host 在装载期**同步**读一次并当作常量——Config 校验与投影注册都跑在装载期，两者都必须同步拿到它，否则 `stateVersion` 在注册时还拿不到表指纹，异步读会让检查点与真实表脱节。代价是改数据要重启 `dsh`；换来的是节假日变更会改变表指纹，从而让检查点失效、整段日志按新数据重折，历史因此跟着改（与改价格走同一条路径）。
 - **逐年更新**：文件里没有的年份会退回「按自然工作日判定」，即该年的法定节假日按高峰价计。
-- **跨币种**：不同币种的金额不会换算合并。胶囊与合计只统计展示币种，其他币种在明细中单独提示。
+- **跨币种不自动折算**：插件不做任何外发请求，也不会硬编码一个会过期的汇率，所以折算率只能由用户通过 `exchangeRates` 提供。各币种**始终并列累加**（不丢信息）；**只要有一种外币缺汇率就不给折算合计**——半个合计比没有合计更危险，它看起来像「全部算完了」，实际漏掉了一种币。汇率方向定为「1 单位该币种等于多少展示币种」，并拒绝包含展示币种自身：那是目标不是来源，写进去说明方向理解反了。
 - **倒计时的小时不进位到天**：跨周末的长间隔按总小时数显示（例如 `63:00:00`），比「2 天 15 小时」更直接地回答「还剩多久」。
 - **金额四舍五入到分**：胶囊显示到分；明细面板给出更精确的数值。
 
@@ -86,6 +86,6 @@ Writes additionally require a custom action header; reads only decide on origin.
 
 - **The holiday data is static package data, not hot-reloaded configuration**: the host reads `data/cn-holidays.json` **synchronously** once at load and treats it as a constant — both config validation and projection registration run at load time and must see it synchronously, otherwise `stateVersion` would register before the table fingerprint is available and the checkpoint could disagree with the real table. The cost is that changing the data needs a `dsh` restart; the benefit is that a holiday change alters the fingerprint, which invalidates the checkpoint and refolds the whole log against the new data — history follows, exactly as it does for a price edit.
 - **A yearly update**: a year with no data falls back to the natural-weekday decision, so that year's public holidays count as peak.
-- **Cross-currency**: amounts in different currencies are not converted or merged. The pill and the total count the display currency only; other currencies are reported separately in the breakdown.
+- **No automatic cross-currency conversion**: the plugin makes no outbound requests and will not hard-code a rate that goes stale, so conversion rates can only come from the user via `exchangeRates`. Every currency is **always accumulated side by side** (no information dropped); and **if any foreign currency lacks a rate, no converted total is shown at all** — half a total is more dangerous than none, because it looks finished while quietly missing a currency. The rate direction is "one unit of that currency equals how many units of the display currency", and naming the display currency itself is rejected: it is the target, not a source, so listing it means the direction was misunderstood.
 - **The countdown does not carry hours into days**: a long gap across a weekend is shown as total hours (for example `63:00:00`), which answers "how long left" more directly than "2 days 15 hours".
 - **Amounts round to the cent**: the pill shows cents; the breakdown panel gives more precise figures.

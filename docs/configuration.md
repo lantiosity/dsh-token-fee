@@ -20,11 +20,12 @@
 
 ## 插件配置（cordis.yml）
 
-`cordis.yml` 里该条目的 `config` 接受四个键：
+`cordis.yml` 里该条目的 `config` 接受五个键：
 
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
 | `displayCurrency` | `CNY` | 胶囊与合计使用的展示币种，必须是 ICU 认识的 ISO 4217 代码。 |
+| `exchangeRates` | 无 | 折算汇率表，见下文「多币种」。形状 `{ 币种代码: 数值 }`，含义为 **1 单位该币种等于多少展示币种**。 |
 | `pricingFile` | `<DSH_HOME>/token-fee.json` | 用户价目表路径；相对路径按 `DSH_HOME` 解析。 |
 | `schedules` | 无 | 额外或覆盖内置的命名峰谷规则。 |
 | `pricing` | 无 | 额外或覆盖其它层的价目条目。 |
@@ -34,9 +35,22 @@
 ```yaml
 - id: token-fee
   config:
-    displayCurrency: USD
+    displayCurrency: CNY
+    exchangeRates:
+      USD: 7.2
     pricingFile: my-prices.json
 ```
+
+## 多币种
+
+价目条目各带 `currency`，因此同一个会话里可能同时存在人民币与美元用量。插件**不做任何外发请求**，也不会硬编码一个会过期的汇率，所以分两层处理：
+
+1. **并列显示（始终生效）**：胶囊、合计与明细都按币种分别列出并各自累加，形如 `¥1.23 + US$0.56`。展示币种排在前面，其余按金额降序。任何币种的用量都不会被丢掉。
+2. **折算合计（需要你配汇率）**：在插件配置里写了 `exchangeRates` 之后，再额外给出一个折算成展示币种的合计，形如 `≈ ¥5.26`。用 `≈` 而不是 `=`，因为那是按你给的汇率算出来的参考值，不是任何一方的实际入账金额。
+
+**只要有一种外币没有配汇率，就不给折算合计**——半个合计比没有合计更危险：它看起来像「全部算完了」，实际漏掉了一种币。明细会点名缺汇率的币种。
+
+汇率是**相对展示币种**的方向（`USD: 7.2` 表示 1 美元 = 7.2 元），并且不该包含展示币种自身（它是折算目标，写了会报错）。改了 `displayCurrency` 之后汇率要按新目标重新填。
 
 ## 文件格式
 
@@ -184,11 +198,12 @@ The user file is revalidated against its mtime whenever a read endpoint is touch
 
 ## Plugin config (cordis.yml)
 
-The entry's `config` in `cordis.yml` accepts four keys:
+The entry's `config` in `cordis.yml` accepts five keys:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `displayCurrency` | `CNY` | Display currency for the pill and the total; must be an ISO 4217 code ICU recognizes. |
+| `exchangeRates` | none | Conversion rates, see "Multiple currencies" below. Shaped `{ currency code: number }`, meaning **one unit of that currency equals how many units of the display currency**. |
 | `pricingFile` | `<DSH_HOME>/token-fee.json` | Path to the user pricing table; a relative path resolves against `DSH_HOME`. |
 | `schedules` | none | Extra or overriding named peak/off-peak schedules. |
 | `pricing` | none | Extra or overriding pricing entries. |
@@ -198,9 +213,22 @@ Config is validated **at load time**: unknown keys, a misspelled currency and st
 ```yaml
 - id: token-fee
   config:
-    displayCurrency: USD
+    displayCurrency: CNY
+    exchangeRates:
+      USD: 7.2
     pricingFile: my-prices.json
 ```
+
+## Multiple currencies
+
+Every pricing entry carries its own `currency`, so one session can mix, say, CNY and USD usage. The plugin **makes no outbound requests** and will not hard-code an exchange rate that goes stale, so it handles this in two layers:
+
+1. **Side by side (always on)**: the pill, the total and the breakdown list each currency separately and accumulate it independently, as in `¥1.23 + US$0.56`. The display currency comes first and the rest follow by amount, largest first. No currency's usage is dropped.
+2. **Converted total (needs your rates)**: once `exchangeRates` is configured, the plugin additionally gives one total converted into the display currency, as in `≈ ¥5.26`. It uses `≈` rather than `=` because that figure comes from the rates you supplied — it is a reference, not an actual charge from either side.
+
+**If any foreign currency has no rate, no converted total is shown at all** — half a total is more dangerous than no total: it looks finished while quietly missing a currency. The breakdown names the currencies that lack a rate.
+
+Rates are **relative to the display currency** (`USD: 7.2` means one US dollar = 7.2 yuan), and must not include the display currency itself (it is the target; naming it fails validation). If you change `displayCurrency`, refill the rates against the new target.
 
 ## File format
 

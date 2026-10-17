@@ -15,6 +15,7 @@ import {
   matchEntry,
   mergePricingLayers,
   normalizeEntry,
+  normalizeExchangeRates,
   normalizeHolidaySets,
   tariffAt,
   tariffOf,
@@ -283,6 +284,80 @@ test('账号路由的内置条目可以单独覆盖，不影响官方路由', ()
   assert.equal(matchEntry(merged, 'deepseek-official', 'deepseek-flash').prices.peak.input, 2)
   // 账号路由没被覆盖的那个模型也仍是内置价。
   assert.equal(matchEntry(merged, 'deepseek-account', 'deepseek-v4-pro').id, 'builtin-deepseek-account-v4-pro-cny')
+})
+
+//#endregion
+
+//#region 多币种
+
+/** 一条人民币与一条美元条目的混合表。 */
+const MIXED_ENTRIES = validatePricing([
+  { id: 'cny', provider: 'p', model: 'm-cny', currency: 'CNY', prices: { peak: { input: 2, cacheRead: 0, cacheWrite: 0, output: 8 } } },
+  { id: 'usd', provider: 'p', model: 'm-usd', currency: 'USD', prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 4 } } },
+])
+
+/** 百万未命中输入：人民币 2 元、美元 1 元。 */
+const MIXED_ROWS = [
+  { provider: 'p', model: 'm-cny', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+  { provider: 'p', model: 'm-usd', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
+]
+
+test('汇率表校验：合法表被冻结，非法值报错', () => {
+  const rates = normalizeExchangeRates({ USD: 7.2 }, 'CNY')
+  assert.equal(rates.USD, 7.2)
+  assert.ok(Object.isFrozen(rates))
+  assert.deepEqual(normalizeExchangeRates(undefined, 'CNY'), {})
+  assert.throws(() => normalizeExchangeRates([], 'CNY'), /必须是对象/)
+  assert.throws(() => normalizeExchangeRates({ USD: 0 }, 'CNY'), /必须是正数/)
+  assert.throws(() => normalizeExchangeRates({ USD: -1 }, 'CNY'), /必须是正数/)
+  assert.throws(() => normalizeExchangeRates({ USD: '7.2' }, 'CNY'), /必须是正数/)
+  assert.throws(() => normalizeExchangeRates({ NO_SUCH: 1 }, 'CNY'), /币种代码/)
+  // 展示币种自身是折算目标，出现在表里说明用户误解了方向。
+  assert.throws(() => normalizeExchangeRates({ CNY: 1 }, 'CNY'), /不应包含展示币种/)
+})
+
+test('未配汇率时并列列出各币种，且不给折算合计', () => {
+  const view = computeCost(MIXED_ROWS, MIXED_ENTRIES, 'CNY')
+  // 合计仍只累加展示币种——这是「amount」的历史语义，保持不变。
+  assert.equal(view.amount, 2)
+  assert.equal(view.byCurrency.CNY, 2)
+  assert.equal(view.byCurrency.USD, 1)
+  // 并列展示把两种币都摆出来，展示币种在前。
+  assert.deepEqual(view.totals, [{ currency: 'CNY', amount: 2 }, { currency: 'USD', amount: 1 }])
+  // 折不进去就说清楚折不进去，而不是给一个漏币的合计。
+  assert.equal(view.convertedAmount, null)
+  assert.deepEqual(view.missingRates, ['USD'])
+  assert.equal(view.mixedCurrency, true)
+})
+
+test('配了汇率就给出折算合计', () => {
+  const view = computeCost(MIXED_ROWS, MIXED_ENTRIES, 'CNY', normalizeExchangeRates({ USD: 7.2 }, 'CNY'))
+  assert.equal(view.convertedAmount, 2 + 1 * 7.2)
+  assert.deepEqual(view.missingRates, [])
+  assert.equal(view.mixedCurrency, true)
+  // 各币种原值仍然保留，折算不覆盖原始口径。
+  assert.deepEqual(view.totals, [{ currency: 'CNY', amount: 2 }, { currency: 'USD', amount: 1 }])
+})
+
+test('只要有一种外币缺汇率就不给合计', () => {
+  // 半个合计比没有合计更危险：它看起来像「全部算完了」，实际漏掉了一种币。
+  const entries = validatePricing([
+    ...MIXED_ENTRIES,
+    { id: 'eur', provider: 'p', model: 'm-eur', currency: 'EUR', prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } } },
+  ])
+  const rows = [...MIXED_ROWS, { provider: 'p', model: 'm-eur', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }]
+  const view = computeCost(rows, entries, 'CNY', normalizeExchangeRates({ USD: 7.2 }, 'CNY'))
+  assert.equal(view.convertedAmount, null)
+  assert.deepEqual(view.missingRates, ['EUR'])
+})
+
+test('单一币种时折算合计等于原合计', () => {
+  const rows = [MIXED_ROWS[0]]
+  const view = computeCost(rows, MIXED_ENTRIES, 'CNY')
+  assert.equal(view.convertedAmount, 2)
+  assert.deepEqual(view.totals, [{ currency: 'CNY', amount: 2 }])
+  assert.equal(view.mixedCurrency, false)
+  assert.deepEqual(view.missingRates, [])
 })
 
 //#endregion
