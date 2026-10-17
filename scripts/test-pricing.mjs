@@ -68,25 +68,24 @@ function splitEntry(overrides = {}) {
 
 //#region 校验
 
-test('内置表覆盖 DeepSeek 的两条路由 × 两个模型', () => {
-  // 账号路由（deepseek-account）与官方路由共用同一份模型目录与同一份价目，
-  // 但各自成条目——账号路由因此在内置价目里可见、可覆盖，不必只靠 provider 别名。
-  assert.equal(BUILTIN_PRICING.length, 4)
-  const ids = BUILTIN_PRICING.map(item => item.id)
-  assert.deepEqual(ids, [
+test('内置表一条条目覆盖 DeepSeek 的两条路由', () => {
+  // 官方 API 与「DeepSeek 账号」共用同一份模型目录与同一份价目，因此只按官方
+  // 路由 id 各建一条条目，账号路由经 provider 别名命中同一条——列表里是一条。
+  assert.equal(BUILTIN_PRICING.length, 2)
+  assert.deepEqual(BUILTIN_PRICING.map(item => item.id), [
     'builtin-deepseek-official-flash-cny',
     'builtin-deepseek-official-v4-pro-cny',
-    'builtin-deepseek-account-flash-cny',
-    'builtin-deepseek-account-v4-pro-cny',
   ])
-  for (const item of BUILTIN_PRICING) assert.equal(item.currency, 'CNY')
-  // 两条路由的价格必须逐字相同：它们是同一个 DeepSeek 服务。
+  for (const item of BUILTIN_PRICING) {
+    assert.equal(item.provider, 'deepseek-official')
+    assert.equal(item.currency, 'CNY')
+  }
+  // 两条路由、两个模型，四组身份两两命中同一条。
   for (const model of ['deepseek-flash', 'deepseek-v4-pro']) {
-    const [official, account] = ['deepseek-official', 'deepseek-account']
-      .map(provider => BUILTIN_PRICING.find(item => item.provider === provider && item.model === model))
-    assert.ok(official, `缺少 ${model} 的官方条目`)
-    assert.ok(account, `缺少 ${model} 的账号路由条目`)
-    assert.deepEqual(account.prices, official.prices, `${model} 两条路由的价格应一致`)
+    const official = matchEntry(BUILTIN_PRICING, 'deepseek-official', model)
+    const account = matchEntry(BUILTIN_PRICING, 'deepseek-account', model)
+    assert.ok(official !== null && account !== null, `${model} 两条路由都应命中`)
+    assert.equal(account.id, official.id, `${model} 的账号路由应命中同一条内置条目`)
   }
 })
 
@@ -205,24 +204,22 @@ test('DeepSeek 账号路由回退到官方条目', () => {
   assert.equal(matchEntry(entries, 'deepseek-official', 'deepseek-v4-flash').id, 'e1')
 })
 
-test('账号路由命中自己的内置条目', () => {
-  // 端到端：账号路由的 (provider, model) 组合直接命中为它列出的内置条目，
-  // 而不是绕道 provider 别名去命中官方条目。
+test('账号路由经别名命中同一条内置条目', () => {
+  // 端到端：账号路由的 (provider, model) 组合命中官方那条内置条目，命中结果的
+  // provider 仍是条目自己的 `deepseek-official`——别名只影响匹配，不改写条目。
   for (const [model, id] of [
-    ['deepseek-flash', 'builtin-deepseek-account-flash-cny'],
-    ['deepseek-v4-pro', 'builtin-deepseek-account-v4-pro-cny'],
+    ['deepseek-flash', 'builtin-deepseek-official-flash-cny'],
+    ['deepseek-v4-pro', 'builtin-deepseek-official-v4-pro-cny'],
   ]) {
-    assert.equal(matchEntry(BUILTIN_PRICING, 'deepseek-account', model)?.id, id)
-    assert.equal(matchEntry(BUILTIN_PRICING, 'deepseek-account', model)?.provider, 'deepseek-account')
+    const hit = matchEntry(BUILTIN_PRICING, 'deepseek-account', model)
+    assert.equal(hit?.id, id)
+    assert.equal(hit?.provider, 'deepseek-official')
+    // 与官方路由命中的是同一条。
+    assert.equal(hit, matchEntry(BUILTIN_PRICING, 'deepseek-official', model))
   }
-  // 账号侧如果出现官方侧的旧模型名，仍由别名回退到账号自己的 flash 条目。
+  // 账号侧如果出现官方侧的旧模型名，仍由模型别名回退到同一条 flash 条目。
   assert.equal(
     matchEntry(BUILTIN_PRICING, 'deepseek-account', 'deepseek-v4-flash')?.id,
-    'builtin-deepseek-account-flash-cny',
-  )
-  // 官方路由不受影响。
-  assert.equal(
-    matchEntry(BUILTIN_PRICING, 'deepseek-official', 'deepseek-flash')?.id,
     'builtin-deepseek-official-flash-cny',
   )
 })
@@ -260,12 +257,12 @@ test('用户条目可覆盖内置条目的价格', () => {
   assert.equal(hit.id, 'mine')
   assert.equal(hit.prices.peak.input, 1.5)
   // 覆盖按 (provider, model, currency) 身份替换，因此只顶掉这一条。
-  assert.equal(merged.length, 4)
+  assert.equal(merged.length, 2)
 })
 
-test('账号路由的内置条目可以单独覆盖，不影响官方路由', () => {
-  // 这正是把账号路由显式列进内置表的好处：两条路由各有各的条目，
-  // 给账号路由另定价不会连带改掉官方路由的价格。
+test('账号路由可以单独定价，不影响官方路由', () => {
+  // 别名只负责「精确命中失败后回退」，因此给账号路由加一条同身份条目即可把它
+  // 单独拎出来定价——这也是合并成一条内置条目之后仍然保留的能力。
   const merged = mergePricingLayers([
     BUILTIN_PRICING,
     validatePricing([{
@@ -276,14 +273,15 @@ test('账号路由的内置条目可以单独覆盖，不影响官方路由', ()
       prices: { peak: { input: 1, cacheRead: 0.01, output: 2 } },
     }]),
   ])
-  assert.equal(merged.length, 4)
+  // 账号路由是新的 (provider, model, currency) 身份，因此是新增而不是替换。
+  assert.equal(merged.length, 3)
   assert.equal(matchEntry(merged, 'deepseek-account', 'deepseek-flash').id, 'acct-mine')
   assert.equal(matchEntry(merged, 'deepseek-account', 'deepseek-flash').prices.peak.input, 1)
   // 官方路由仍是内置价。
   assert.equal(matchEntry(merged, 'deepseek-official', 'deepseek-flash').id, 'builtin-deepseek-official-flash-cny')
   assert.equal(matchEntry(merged, 'deepseek-official', 'deepseek-flash').prices.peak.input, 2)
-  // 账号路由没被覆盖的那个模型也仍是内置价。
-  assert.equal(matchEntry(merged, 'deepseek-account', 'deepseek-v4-pro').id, 'builtin-deepseek-account-v4-pro-cny')
+  // 账号路由没被单独定价的那个模型仍回退到内置条目。
+  assert.equal(matchEntry(merged, 'deepseek-account', 'deepseek-v4-pro').id, 'builtin-deepseek-official-v4-pro-cny')
 })
 
 //#endregion

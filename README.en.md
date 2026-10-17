@@ -81,7 +81,7 @@ All three paths merge the host half into the profile's bundle layer — this pac
 
 The pricing table is merged from three layers, **each overriding the previous one**:
 
-1. Built-in layer: DeepSeek's **two routes** (`deepseek-official`, `deepseek-account`) × two models (`deepseek-flash`, `deepseek-v4-pro`) with their peak/off-peak rules — four entries in total;
+1. Built-in layer: DeepSeek's official pricing — one entry per model (`deepseek-flash`, `deepseek-v4-pro`), two in total; **one entry covers both `deepseek-official` and `deepseek-account`** (the account route matches the same entry through the provider alias);
 2. User file layer: `<DSH_HOME>/token-fee.json`;
 3. Plugin config layer: the `pricing` / `schedules` fields of the cordis config.
 
@@ -187,7 +187,7 @@ The plugin ships one schedule named `deepseek` (Beijing time, Monday to Friday 0
 | `deepseek-v4-pro` | Peak | ¥0.30 | ¥9 | ¥27 |
 | `deepseek-v4-pro` | Off-peak | ¥0.15 | ¥4.5 | ¥13.5 |
 
-All figures are CNY per million tokens, taken from DeepSeek's official pricing page. **Both DeepSeek routes get their own entries at the same price**: `deepseek-official` (API key) and `deepseek-account` ("DeepSeek Account", an account token) — so the account route is visible and independently overridable in the built-in pricing rather than only reachable through the provider alias.
+All figures are CNY per million tokens, taken from DeepSeek's official pricing page. **One entry per model, covering both `deepseek-official` (API key) and `deepseek-account` ("DeepSeek Account", an account token)** — they cost the same and the account route matches the same entry through the provider alias, so the list holds one entry rather than two. To price the account route separately, add an entry with `provider: "deepseek-account"` (an exact match beats the alias).
 
 ## Known limitations
 

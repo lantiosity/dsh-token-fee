@@ -10,7 +10,7 @@
 
 价目表由三层合并而成，**后者覆盖前者**：
 
-1. 插件内置层：DeepSeek **两条路由**（`deepseek-official` 与 `deepseek-account`）× 两个模型（`deepseek-flash`、`deepseek-v4-pro`）的价格与峰谷规则，共 4 条；
+1. 插件内置层：DeepSeek 官方定价——`deepseek-flash`、`deepseek-v4-pro` 两个模型各一条，共 2 条；**一条覆盖 `deepseek-official` 与 `deepseek-account` 两条路由**；
 2. 用户文件层：`<DSH_HOME>/token-fee.json`；
 3. 插件配置层：cordis 配置中的 `pricing` / `schedules` 字段。
 
@@ -149,7 +149,7 @@
 
 历史路由 id `deepseek`、以及 DSH 的 **DeepSeek 账号路由 `deepseek-account`**（`@deepseek-ai/dsh-llm-deepseek-account`，界面里叫「DeepSeek 账号」），都会回退到 `deepseek-official`；已下线模型名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 会回退到 `deepseek-flash`。
 
-两条 DeepSeek 路由共用同一套 Messages 传输与同一份模型目录，只是鉴权方式不同（API key 与账号令牌），账号侧的模型 id 是 `deepseek-v4-flash` / `deepseek-v4-pro`，因此两条路由的用量都能命中内置价目。回退**只在精确命中失败后发生**——想给账号路由单独定价，按 `provider: "deepseek-account"` 加一条即可，它会优先获胜。
+两条 DeepSeek 路由共用同一套 Messages 传输、同一份模型目录（`deepseek-flash` / `deepseek-v4-pro`）与同一份价目，因此内置表**每个模型只列一条**，账号路由经别名命中同一条。回退**只在精确命中失败后发生**——想给账号路由单独定价，按 `provider: "deepseek-account"` 加一条即可，它会优先获胜。
 
 没有命中任何条目的模型，其 token 数照常展示，金额标记为「未配置价格」，**不计入合计**。
 
@@ -200,7 +200,7 @@ The complete reference for the pricing table and peak/off-peak schedules: the th
 
 The pricing table is merged from three layers, **each overriding the previous one**:
 
-1. Built-in layer: DeepSeek's **two routes** (`deepseek-official` and `deepseek-account`) × two models (`deepseek-flash`, `deepseek-v4-pro`) with their peak/off-peak rules — four entries in total;
+1. Built-in layer: DeepSeek's official pricing — one entry per model (`deepseek-flash`, `deepseek-v4-pro`), two in total; **one entry covers both `deepseek-official` and `deepseek-account`**;
 2. User file layer: `<DSH_HOME>/token-fee.json`;
 3. Plugin config layer: the `pricing` / `schedules` fields of the cordis config.
 
@@ -339,7 +339,7 @@ Entries match on `(provider, model)`, highest priority first: **exact → provid
 
 The historical route id `deepseek`, and DSH's **DeepSeek account route `deepseek-account`** (`@deepseek-ai/dsh-llm-deepseek-account`, shown as "DeepSeek Account" in the UI), both fall back to `deepseek-official`; the retired model names `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` fall back to `deepseek-flash`.
 
-The two DeepSeek routes share one Messages transport and one model catalog and differ only in authentication (an API key versus an account token); the account side's model ids are `deepseek-v4-flash` and `deepseek-v4-pro`. Usage on either route therefore matches the built-in pricing. The fallback happens **only after an exact match fails** — to price the account route separately, add an entry with `provider: "deepseek-account"` and it wins.
+The two DeepSeek routes share one Messages transport, one model catalog (`deepseek-flash` / `deepseek-v4-pro`) and one set of prices, so the built-in layer lists **one entry per model** and the account route matches it through the alias. The fallback happens **only after an exact match fails** — to price the account route separately, add an entry with `provider: "deepseek-account"` and it wins.
 
 A model that matches no entry still shows its token counts, but its amount is marked as unpriced and is **excluded from the total**.
 

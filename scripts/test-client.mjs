@@ -1029,9 +1029,9 @@ test('编辑器把自定义条目按供应商折叠', () => {
   assert.match(html, /alpha \/ m3/)
 })
 
-test('只读区把 DeepSeek 两条路由的内置条目都列出来', async () => {  // 把账号路由显式列进内置表的意义就在这里：它在界面上是可见的一等公民，
-  // 而不是只能靠 provider 别名悄悄命中官方条目。列表按供应商分组，因此
-  // 两条路由各有一个表头。
+test('只读区把内置条目按供应商列出', async () => {
+  // 一条内置条目覆盖官方 API 与「DeepSeek 账号」两条路由，因此只读区里只有
+  // 官方那一个分组、两条模型；账号路由靠 provider 别名命中同一条，不再单列。
   const hostPricing = await import('../lib/pricing.js')
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
@@ -1041,10 +1041,12 @@ test('只读区把 DeepSeek 两条路由的内置条目都列出来', async () =
     pricing: fakePricing({ builtin: hostPricing.BUILTIN_PRICING }),
   }))
   assert.match(html, /<span class="tf_providerName">deepseek-official<\/span>/)
-  assert.match(html, /<span class="tf_providerName">deepseek-account<\/span>/, '账号路由应有自己的分组表头')
-  // 每个分组下两条模型，卡片标题仍是「供应商 / 模型」。
-  assert.match(html, /deepseek-account \/ deepseek-flash/)
-  assert.match(html, /deepseek-account \/ deepseek-v4-pro/)
+  assert.doesNotMatch(html, /<span class="tf_providerName">deepseek-account<\/span>/, '账号路由不再单列')
+  assert.match(html, /<span class="tf_providerCount">2 条<\/span>/)
+  assert.match(html, /deepseek-official \/ deepseek-flash/)
+  assert.match(html, /deepseek-official \/ deepseek-v4-pro/)
+  // 条目说明里点出它同时覆盖账号路由，否则用户会以为账号侧没价。
+  assert.match(html, /DeepSeek 账号/)
   assert.doesNotMatch(html, /未配置价格/)
 })
 
@@ -1993,10 +1995,11 @@ test('明细在配了汇率后给出折算合计并写明汇率', () => {
   assert.match(html, /1 USD = 7\.2 CNY/)
 })
 
-test('DeepSeek 账号路由在浏览器半命中它自己的内置条目', async () => {
+test('DeepSeek 账号路由在浏览器半命中同一条内置条目', async () => {
   // 回归：`deepseek-account`（DSH 的「DeepSeek 账号」路由）与 `deepseek-official`
-  // 是两条路由、一套价。内置表为账号路由单独列了条目；浏览器半的 matchEntry 是
-  // host 半的镜像实现，两边不同步会让胶囊把账号路由显示成未配置价格。
+  // 是两条路由、一套价。内置表只有官方那一条，账号路由经 provider 别名命中它；
+  // 浏览器半的 matchEntry 是 host 半的镜像实现，别名表漏同步会让胶囊把账号路由
+  // 显示成未配置价格。
   const hostPricing = await import('../lib/pricing.js')
   const rows = [{
     provider: 'deepseek-account',
@@ -2013,14 +2016,14 @@ test('DeepSeek 账号路由在浏览器半命中它自己的内置条目', async
   assert.equal(browser.unpricedCount, 0, '浏览器半不应判为未配置')
   assert.equal(host.amount, 2, '百万未命中输入按 flash 高峰价 2 计')
   assert.equal(browser.amount, 2, '两侧金额必须一致')
-  // 命中账号路由**自己的**内置条目，而不是靠 provider 别名绕到官方条目。
+  // 命中官方那条内置条目——别名只影响匹配，不改写条目自己的 provider。
   assert.equal(
     hostPricing.matchEntry(hostPricing.BUILTIN_PRICING, 'deepseek-account', 'deepseek-flash')?.id,
-    'builtin-deepseek-account-flash-cny',
+    'builtin-deepseek-official-flash-cny',
   )
   assert.equal(
     hostPricing.matchEntry(hostPricing.BUILTIN_PRICING, 'deepseek-account', 'deepseek-flash')?.provider,
-    'deepseek-account',
+    'deepseek-official',
   )
 
   // 胶囊上的计费模式走的是同一份镜像匹配。这里故意用官方侧的旧模型名

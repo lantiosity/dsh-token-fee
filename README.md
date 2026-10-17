@@ -81,7 +81,7 @@ node scripts/install.mjs --check    # 校验既有安装
 
 价目表由三层合并而成，**后者覆盖前者**：
 
-1. 插件内置层：DeepSeek **两条路由**（`deepseek-official`、`deepseek-account`）× 两个模型（`deepseek-flash`、`deepseek-v4-pro`）的价格与峰谷规则，共 4 条；
+1. 插件内置层：DeepSeek 官方定价——`deepseek-flash`、`deepseek-v4-pro` 两个模型各一条，共 2 条；**一条覆盖 `deepseek-official` 与 `deepseek-account` 两条路由**（账号路由经 provider 别名命中同一条）；
 2. 用户文件层：`<DSH_HOME>/token-fee.json`；
 3. 插件配置层：cordis 配置中的 `pricing` / `schedules` 字段。
 
@@ -187,7 +187,7 @@ node scripts/install.mjs --check    # 校验既有安装
 | `deepseek-v4-pro` | 高峰 | ¥0.30 | ¥9 | ¥27 |
 | `deepseek-v4-pro` | 空闲 | ¥0.15 | ¥4.5 | ¥13.5 |
 
-单位均为「元 / 百万 token」，来源为 DeepSeek 官方定价页。**两条 DeepSeek 路由各自成条目、价格相同**：`deepseek-official`（API key）与 `deepseek-account`（「DeepSeek 账号」，账号令牌）——账号路由因此在内置价目里可见、可单独覆盖，不必只靠 provider 别名回退。
+单位均为「元 / 百万 token」，来源为 DeepSeek 官方定价页。**每个模型一条，同时覆盖 `deepseek-official`（API key）与 `deepseek-account`（「DeepSeek 账号」，账号令牌）两条路由**——两者价格相同，账号路由经 provider 别名命中同一条，列表里因此只有一条。要给账号路由另定价，按 `provider: "deepseek-account"` 加一条即可（精确命中优先于别名）。
 
 ## 已知限制
 
