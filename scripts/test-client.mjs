@@ -1149,6 +1149,49 @@ test('只读区把内置条目按供应商列出', async () => {
   assert.doesNotMatch(cards, /未配置价格/)
 })
 
+test('正在输入 provider 时分组键不随输入变化', () => {
+  // 回归：分组键曾经直接取 provider，而用户正是在输入它——每击一键 key 就变，
+  // React 会把整棵子树拆掉重建，输入框因此失焦，表单里的草稿也一起丢。
+  // 含编辑中条目的分组改用条目 id 作键：它不随输入变化。
+  // 走 entryGroupList（渲染层用的同一个函数），断言覆盖真实渲染路径。
+  const groupKeys = (providerValue) => clientExports
+    .entryGroupList([{ ...FILE_ENTRY, id: 'custom-1', provider: providerValue }], new Set(['custom-1']))
+    .map(group => group.key);
+
+  assert.deepEqual(groupKeys(''), groupKeys('d'));
+  assert.deepEqual(groupKeys('deepseek'), groupKeys('deepseeker'));
+  // 键必须唯一：两条正在编辑的条目不能抢同一棵子树。
+  const two = clientExports
+    .entryGroupList(
+      [{ ...FILE_ENTRY, id: 'custom-1', provider: '' }, { ...FILE_ENTRY, id: 'custom-2', provider: '' }],
+      new Set(['custom-1', 'custom-2']),
+    )
+    .map(group => group.key);
+  assert.equal(new Set(two).size, two.length);
+  // 没有编辑中的条目时，键仍是 provider（按供应商折叠要靠它）。
+  const folded = clientExports.entryGroupList([{ ...FILE_ENTRY, id: 'e1', provider: 'zeta' }], new Set());
+  assert.deepEqual(folded.map(group => group.key), ['zeta']);
+  assert.equal(folded[0].editingId, undefined);
+})
+
+test('provider / model 两列与「币种 / 峰谷规则」对齐', () => {
+  // 对齐由结构保证：两行共用同一个 `.tf_grid2`，而不是各写一套数值凑巧相同。
+  // 曾经为收窄加过固定像素与带空列的专用网格，结果要么容器一变窄就溢出、
+  // 要么与下一行错位。
+  const html = renderEntryEditor();
+  assert.doesNotMatch(html, /tf_grid2Route/, '不应再有专用的路由网格');
+  const rows = html.match(/class="tf_grid2"/g) ?? [];
+  assert.ok(rows.length >= 2, `应至少有两处共用 tf_grid2（实际 ${rows.length}）`);
+  // 光有轨道还不够：官方 `Menu` 把 anchor 包在 `display:inline-flex` 的收缩盒里，
+  // 该包装的 `min-width:auto` 以内容宽度为下限，会越过轨道盖到相邻字段上。
+  // 必须给它一个**确定宽度**——只写 min/max-width 时实测仍然膨胀（内容下限优先于
+  // max-width），补 width:100% 之后两列才真正等于轨道宽度。
+  const cap = /\.tf_field > \*:not\(\.tf_fieldLabel\)\{([^}]*)\}/.exec(styleTags[0].textContent);
+  assert.ok(cap !== null, '应把字段子元素的宽度夹在轨道内');
+  assert.match(cap[1], /(^|;)width:100%/, '必须有确定宽度，否则内容下限会撑破轨道');
+  assert.match(cap[1], /min-width:0/);
+})
+
 test('高峰星期独占一行，不与时区挤在同一网格里', () => {
   // 7 个星期按钮本身要 214px；挤在两列网格的一列里会把价格设置面板的宽度下限
   // 顶到 460px 以上。独占一行后下限回到四列单价表那边（约 380px）。
@@ -1634,8 +1677,12 @@ test('规则下拉在未开启峰谷时也可用', () => {
     t,
   }))
   assert.doesNotMatch(html, /<select[^>]*disabled/)
-  // 规则下拉列出内置与自定义规则，并停在没有规则上。
-  assert.match(html, /<option value=""[^>]*>[^<]*<\/option><option value="deepseek">deepseek<\/option><option value="mine">mine<\/option>/)
+  // 规则下拉与 provider / model 同一套外观：`tf_combo` 显示当前值，选项交给
+  // 官方 Menu（收起时不渲染列表）。停在没有规则上，显示「统一单价」。
+  assert.match(html, /class="tf_combo"/)
+  assert.match(html, /class="tf_comboValue"[^>]*>单价</)
+  assert.doesNotMatch(html, /<select/)
+  assert.doesNotMatch(html, /<option/)
   // 统一单价时只有高峰价一档，勾选框未勾上。
   assert.match(html, /<input type="checkbox"\/>/)
   assert.match(html, /高峰单价（每百万 token）|单价（每百万 token）/)
@@ -1657,7 +1704,9 @@ test('条目表单在区分峰谷时补出空闲价一栏', () => {
     onCollapse: () => {},
     t,
   }))
-  assert.match(html, /<option value="mine" selected="">mine<\/option>/)
+  // 选了规则之后，组合框显示规则名本身（不再有原生 <option selected>）。
+  assert.match(html, /class="tf_comboValue"[^>]*>mine</)
+  assert.doesNotMatch(html, /<option/)
   assert.match(html, /高峰单价（每百万 token）/)
   assert.match(html, /空闲单价（每百万 token）/)
   assert.match(html, /<input type="checkbox" checked=""/)
