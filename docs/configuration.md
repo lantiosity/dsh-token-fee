@@ -101,6 +101,10 @@
 
 价目条目（自定义与只读内置两段都是）**按供应商分组**，每组一个整宽的表头，写着供应商 id、该组条目数与一个折叠箭头。**默认全部展开**——条目少时先折叠只是多一次点击；条目多起来之后这一层才用来把列表收短。
 
+**列表按供应商、模型名的首字母排序**，组内同理。比较忽略大小写（`alpha` 排在 `Beta` 前），但**分组按原样**——provider id 大小写敏感，`Beta` 与 `beta` 是两条不同的路由，不会被并成一组。用码位而不是 `localeCompare` 比较：列表顺序不该随运行环境的 locale 变化，否则同一份配置在两台机器上看到的顺序会不一样。
+
+**排序与折叠都只作用于展示**：底层数组的顺序决定同优先级通配条目的匹配顺序（先出现的胜出），因此展示层排的是副本，编辑与删除仍按条目在原始数组里的下标回写。
+
 几条细节：
 
 - **组序取供应商首次出现的位置**，组内保持原顺序，因此新增或编辑条目都不会让已有条目跳位。折叠只影响呈现，数据结构不动——编辑与删除仍按条目在原始数组里的下标回写。
@@ -292,9 +296,12 @@ The panel's "Pricing" tab and the "Token fee" page in dsh settings use the same 
 
 Pricing entries — in both the custom and the read-only built-in section — are **grouped by provider**, each group with a full-width header showing the provider id, that group's entry count and a collapse caret. **All groups start expanded**: with few entries folding first would only cost a click, so the layer is there to shorten the list once it grows.
 
+**The list is sorted by provider and then model name**, and so are the entries inside a group. Comparison ignores case (`alpha` before `Beta`), but **grouping does not** — provider ids are case-sensitive, so `Beta` and `beta` are two different routes and are never merged. Comparison is by code unit rather than `localeCompare`: list order must not shift with the runtime locale, or the same configuration would look different on two machines.
+
+**Sorting and folding are presentation only**: the underlying array order decides matching among wildcard entries of the same priority (the earlier one wins), so the view sorts a copy and editing/deleting still write back by each entry's index in the original array.
+
 A few details:
 
-- **Group order follows where each provider first appears**, and entries keep their original order inside a group, so adding or editing an entry never makes existing ones jump. Folding is presentation only and does not touch the data — editing and deleting still write back by each entry's index in the original array.
 - **A group holding the entry being edited is forced open**: otherwise clicking "Edit" would show no form and the user would think the button was broken. The intent to fold yields to an edit in progress.
 - The header is a **button**, not a decorative title: folding is an interaction and has to be keyboard-reachable, so `aria-expanded` always matches the real state.
 - A new entry whose `provider` is still empty forms its own group, headed "(no provider yet)".

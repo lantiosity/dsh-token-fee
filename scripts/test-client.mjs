@@ -977,22 +977,57 @@ test('新增条目排在第一位，而不是追加到最后', () => {
   assert.deepEqual(clientExports.prependEntry([], fresh), [fresh])
 })
 
-test('条目按供应商分组，组序取首次出现的位置', () => {
+test('条目按供应商、模型名排序后分组', () => {
+  // 故意把供应商与模型都打乱：结果必须按名字排好，而不是按原始顺序。
   const entries = [
-    { id: 'a', provider: 'p1', model: 'm1' },
-    { id: 'b', provider: 'p2', model: 'm2' },
-    { id: 'c', provider: 'p1', model: 'm3' },
+    { id: 'a', provider: 'zeta', model: 'b' },
+    { id: 'b', provider: 'alpha', model: 'z' },
+    { id: 'c', provider: 'zeta', model: 'a' },
+    { id: 'd', provider: 'beta', model: 'm' },
   ]
-  const groups = clientExports.groupByProvider(entries)
-  assert.deepEqual(groups.map(group => group.provider), ['p1', 'p2'])
-  // 组内保持原顺序，且每项带着它在原始数组里的下标——编辑与删除仍按下标回写，
-  // 因此折叠只是呈现层的事，不动数据结构。
-  assert.deepEqual(groups[0].items.map(item => [item.entry.id, item.index]), [['a', 0], ['c', 2]])
-  assert.deepEqual(groups[1].items.map(item => [item.entry.id, item.index]), [['b', 1]])
+  const groups = clientExports.entryGroups(entries)
+  assert.deepEqual(groups.map(group => group.provider), ['alpha', 'beta', 'zeta'])
+  // 组内按模型名排序，且每项带着它在**原始数组**里的下标——排序与折叠都只作用于
+  // 呈现，编辑与删除仍按下标回写。
+  assert.deepEqual(groups[2].items.map(item => [item.entry.id, item.index]), [['c', 2], ['a', 0]])
+  assert.deepEqual(groups[0].items.map(item => [item.entry.id, item.index]), [['b', 1]])
+})
+
+test('排序忽略大小写，但不合并分组', () => {
+  const entries = [
+    { id: 'a', provider: 'Beta', model: 'm' },
+    { id: 'b', provider: 'alpha', model: 'm' },
+    { id: 'c', provider: 'beta', model: 'm' },
+    { id: 'd', provider: 'alpha', model: 'n' },
+  ]
+  const groups = clientExports.entryGroups(entries)
+  // 比较时忽略大小写（alpha 排在 Beta 之前），但**分组按原样**——provider id
+  // 大小写敏感，`Beta` 与 `beta` 是两条不同的路由，不该被并成一组。
+  assert.deepEqual(groups.map(group => group.provider), ['alpha', 'Beta', 'beta'])
+  // 组内按模型名排序。
+  assert.deepEqual(groups[0].items.map(item => item.entry.id), ['b', 'd'])
+})
+
+test('空供应商排在所有非空值之前', () => {
+  // 这正好让刚新增、还没填 provider 的条目落在列表最前面。
+  const groups = clientExports.entryGroups([
+    { id: 'a', provider: 'zeta', model: 'm' },
+    { id: 'b', provider: '', model: '' },
+  ])
+  assert.deepEqual(groups.map(group => group.provider), ['', 'zeta'])
+})
+
+test('排序不改动传入的数组', () => {
+  const entries = [
+    { id: 'a', provider: 'zeta', model: 'm' },
+    { id: 'b', provider: 'alpha', model: 'm' },
+  ]
+  clientExports.entryGroups(entries)
+  assert.deepEqual(entries.map(entry => entry.id), ['a', 'b'])
 })
 
 test('还没填供应商的条目自成一组，并显示占位名', () => {
-  assert.deepEqual(clientExports.groupByProvider([{ id: 'a', provider: '', model: '' }]).map(group => group.provider), [''])
+  assert.deepEqual(clientExports.entryGroups([{ id: 'a', provider: '', model: '' }]).map(group => group.provider), [''])
   const html = render(react.createElement(clientExports.ProviderGroup, {
     provider: '', count: 1, collapsed: false, onToggle: () => {}, t,
   }, 'body'))
@@ -1020,10 +1055,11 @@ test('分组默认展开，折叠后内容不再渲染', () => {
 })
 
 test('编辑器把自定义条目按供应商折叠', () => {
+  // 故意乱序给：渲染出来必须按供应商、模型名排好。
   const three = [
-    { ...FILE_ENTRY, id: 'e1', provider: 'alpha', model: 'm1' },
-    { ...FILE_ENTRY, id: 'e2', provider: 'beta', model: 'm2' },
-    { ...FILE_ENTRY, id: 'e3', provider: 'alpha', model: 'm3' },
+    { ...FILE_ENTRY, id: 'e1', provider: 'zeta', model: 'm2' },
+    { ...FILE_ENTRY, id: 'e2', provider: 'alpha', model: 'm9' },
+    { ...FILE_ENTRY, id: 'e3', provider: 'zeta', model: 'm1' },
   ]
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
@@ -1032,14 +1068,14 @@ test('编辑器把自定义条目按供应商折叠', () => {
     t,
     pricing: fakePricing({ entries: three, fileEntries: three }),
   }))
-  // 两个供应商各一个表头：alpha 归一组的两个条目，beta 一个。
+  // 两个供应商各一个表头：zeta 归一组的两个条目，alpha 一个。
+  assert.match(html, /<span class="tf_providerName">zeta<\/span>/)
   assert.match(html, /<span class="tf_providerName">alpha<\/span>/)
-  assert.match(html, /<span class="tf_providerName">beta<\/span>/)
   assert.match(html, /<span class="tf_providerCount">2 条<\/span>/)
   assert.match(html, /<span class="tf_providerCount">1 条<\/span>/)
-  // 条目内容仍在（默认展开）。
-  assert.match(html, /alpha \/ m1/)
-  assert.match(html, /alpha \/ m3/)
+  // 分组按供应商名升序，组内按模型名升序。
+  assert.ok(html.indexOf('tf_providerName">alpha') < html.indexOf('tf_providerName">zeta'), 'alpha 应排在 zeta 之前')
+  assert.ok(html.indexOf('zeta / m1') < html.indexOf('zeta / m2'), '组内应按模型名排序')
 })
 
 test('只读区把内置条目按供应商列出', async () => {
