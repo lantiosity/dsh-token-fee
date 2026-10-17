@@ -107,6 +107,7 @@
 - **正在编辑的条目所在分组强制展开**：否则点了「编辑」却看不到表单，用户只会以为按钮坏了。折叠的意图让位于正在进行的编辑。
 - 表头是**按钮**而不是装饰性标题：折叠是交互，得能用键盘触发，`aria-expanded` 与实际状态始终一致。
 - `provider` 还没填的新条目自成一组，表头显示「（未填供应商）」。
+- **点「新增条目」时新条目排在第一位**，不是追加到最后：它的 `provider` / `model` 都是空的，本来就该在最显眼处填写；条目一多，追加到末尾会让人还得往下滚才能找到那个刚出现的编辑框。顺序同时决定同优先级通配条目的匹配顺序（先出现的胜出），因此排在最前也符合「刚加的优先」。
 - 自定义条目与只读内置条目各折各的，即使两段里有同名供应商。
 
 ### 建议列表
@@ -297,6 +298,7 @@ A few details:
 - **A group holding the entry being edited is forced open**: otherwise clicking "Edit" would show no form and the user would think the button was broken. The intent to fold yields to an edit in progress.
 - The header is a **button**, not a decorative title: folding is an interaction and has to be keyboard-reachable, so `aria-expanded` always matches the real state.
 - A new entry whose `provider` is still empty forms its own group, headed "(no provider yet)".
+- **Clicking "Add entry" puts the new entry first**, not last: its `provider` / `model` are empty and belong where they are most visible, and with a long list appending would force a scroll to find the edit box that just appeared. Order also decides matching among wildcard entries of the same priority (the earlier one wins), so being first matches the intuition that the entry you just added takes precedence.
 - Custom and read-only built-in entries fold independently, even when both contain the same provider.
 
 ### Suggestions

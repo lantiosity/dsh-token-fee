@@ -964,6 +964,19 @@ test('不区分峰谷的条目只渲染一行价格', () => {
   assert.doesNotMatch(html, /tf_priceRowLabel">空闲/)
 })
 
+test('新增条目排在第一位，而不是追加到最后', () => {
+  // 条目一多，追加到末尾会让用户点完「新增条目」还得往下滚才能找到那个刚出现的
+  // 空编辑框；而且顺序决定同优先级通配条目的匹配顺序，排在最前也符合「刚加的优先」。
+  const existing = [{ id: 'a' }, { id: 'b' }]
+  const fresh = { id: 'new' }
+  assert.deepEqual(clientExports.prependEntry(existing, fresh), [fresh, ...existing])
+  assert.equal(clientExports.prependEntry(existing, fresh)[0], fresh)
+  // 不改动入参。
+  assert.deepEqual(existing, [{ id: 'a' }, { id: 'b' }])
+  // 空列表也能用。
+  assert.deepEqual(clientExports.prependEntry([], fresh), [fresh])
+})
+
 test('条目按供应商分组，组序取首次出现的位置', () => {
   const entries = [
     { id: 'a', provider: 'p1', model: 'm1' },
