@@ -696,6 +696,14 @@ test('未配置价格的用量行计入 unpriced 且不影响合计', () => {
   assert.equal(view.unpriced.length, 1)
   assert.equal(view.models[0].priced, false)
   assert.equal(view.models[0].amount, null)
+  // 行里显式给了 tariff 就照抄（host 折叠出的行总是带着它）。
+  assert.equal(view.models[0].tariff, 'peak')
+  // 省略 tariff 时兜底取 flat（「没有条目就没有时段可判」），与 tariffOf 一致；
+  // 兜成 peak 会把未定价的用量说成高峰。
+  const noTariff = computeCost([
+    { provider: 'my-gateway', model: 'glm-5', input: 500, cacheRead: 0, cacheWrite: 0, output: 500 },
+  ], entries, 'CNY')
+  assert.equal(noTariff.models[0].tariff, 'flat')
 })
 
 test('内置表按官方价算出 flash 高峰一百万的费用', () => {

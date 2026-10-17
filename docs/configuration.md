@@ -131,7 +131,9 @@
 
 ### 保存前的本地拦截
 
-保存前客户端会拦下三种「界面点得出来、host 必然拒绝」的状态并给出本地化提示：删光所有条目、条目没填模型 id、勾了「区分峰谷」却没选规则。
+保存前客户端会拦下两种「界面点得出来、host 必然拒绝」的状态并给出本地化提示：条目没填模型 id、勾了「区分峰谷」却没选规则。
+
+**删光所有条目不再是错误**：规则区与条目区各自独立，只写 `schedules`、一条条目都没有的文件现在存得下去（内置价目与插件配置层照常生效）。此前这条被当成错误拦下，与文档自己承诺的「先建规则、再挂到条目上」相矛盾——全新安装时想先建一条规则，就只能先造一条用不上的条目。要回到纯内置价目，仍用「恢复内置价目」。
 
 ### 引用往返
 
@@ -335,7 +337,9 @@ Inputs that cannot be parsed, or that are negative, are **written as 0** on save
 
 ### Blocked before saving
 
-Before saving, the client also blocks three states that the UI can construct but the host would necessarily reject, each with a localized message: deleting every entry, an entry with no model id, and an entry with peak/off-peak prices but no schedule selected.
+Before saving, the client blocks two states that the UI can construct but the host would necessarily reject, each with a localized message: an entry with no model id, and an entry with peak/off-peak prices but no schedule selected.
+
+**Deleting every entry is no longer an error**: the rule area and the entry area are independent, so a file carrying only `schedules` and no entries now saves (built-in pricing and the plugin config layer still apply). Treating it as an error contradicted this document's own promise that "create the rule first, attach it to an entry later" is a normal order — on a fresh install, creating a rule first required fabricating a throwaway entry. To go back to purely built-in pricing, still use "Restore built-in pricing".
 
 ### Reference round-trips
 

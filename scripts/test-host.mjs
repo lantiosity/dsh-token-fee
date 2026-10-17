@@ -206,6 +206,76 @@ await test('价目表一变，投影状态版本就变，订阅者也收到通�
   off()
 })
 
+await test('状态版本的进位不重叠：指纹先对进位基数取模', async () => {
+  // 指纹是 32 位哈希（上界 4294967295），而进位基数只取 1e9——约 77% 的指纹大于它。
+  // 不取模的话，指纹会溢出到高一档 FOLD_VERSION 的区间：例如「折叠版本 3、指纹
+  // 1e9+5」与「折叠版本 4、指纹 5」会算出同一个状态版本，检查点因此不失效，历史
+  // 样本按旧表冻结。
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const store = new PricingStore(resolveConfig({ pricingFile: join(dir, 'token-fee.json') }))
+  const SCALE = 1e9
+  assert.ok(Number.isSafeInteger(store.projectionVersion()))
+  // 直接构造一个大于进位基数的指纹：断言取模后的组合，而不是「% SCALE 相等」
+  // ——后者对取模与否都成立（3*SCALE + r ≡ r (mod SCALE)），是个假断言。
+  store.revision = SCALE + 5
+  assert.equal(store.projectionVersion(), 3 * SCALE + 5, '指纹必须先取模再进位')
+  // 不取模会得到 4*SCALE + 5，与「折叠版本 4、指纹 5」撞车。
+  assert.notEqual(store.projectionVersion(), 4 * SCALE + 5)
+  // 取模不改变低 9 位以内的指纹（常见情况）。
+  store.revision = 12345
+  assert.equal(store.projectionVersion(), 3 * SCALE + 12345)
+})
+
+await test('空条目表可以保存，且内置层照常生效', async () => {
+  // 规则区与条目区各自独立，文档把「先建规则、再挂到条目上」写成了正常顺序，
+  // 因此只有 schedules、还没有任何条目的文件必须存得下去。
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await store.save({
+    version: 1,
+    schedules: { mine: { timezone: 'UTC', peakDays: [1], peakWindows: [['00:00', '06:00']] } },
+    entries: [],
+  })
+  const written = JSON.parse(await readFile(file, 'utf8'))
+  assert.deepEqual(written.entries, [])
+  assert.deepEqual(Object.keys(written.schedules), ['mine'])
+  assert.equal(store.fileError, null, '空条目表不是错误')
+  // 内置层仍在：条目为空不等于「没有价格」。
+  assert.ok(store.entries.length >= 2, `内置条目应仍在，实际 ${store.entries.length}`)
+  assert.ok(store.schedules.mine !== undefined, '用户规则应生效')
+  assert.ok(store.schedules.deepseek !== undefined, '内置规则应仍在')
+})
+
+await test('同一进程内并发保存各写各的临时文件', async () => {
+  // 临时名曾经只带 pid：同一进程里两次并发保存会撞同一个文件名，一个写到一半被另一
+  // 个截断。现在带随机后缀，两次并发保存都应产出完整文件。
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  const entry = (id) => ({
+    id, provider: 'p', model: 'm', currency: 'CNY',
+    prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+  })
+  await Promise.all([
+    store.save({ version: 1, entries: [entry('a')] }),
+    store.save({ version: 1, entries: [entry('b')] }),
+  ])
+  // 落盘内容必须是两次之一，且是完整可解析的 JSON（不是被截断的半截文件）。
+  const written = JSON.parse(await readFile(file, 'utf8'))
+  assert.ok(['a', 'b'].includes(written.entries[0].id))
+  assert.equal(store.fileError, null)
+})
+
 await test('改价目表后投影注册被重装，版本号随之更新', async () => {
   const { mkdtemp, writeFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
@@ -780,7 +850,10 @@ await test('Config 是 Standard Schema，填默认值并拒绝未知键', () => 
   assert.ok(validate({ displayCurrency: 'RMB' }).issues, '拼错的币种应被拒绝')
   assert.ok(validate({ pricingFile: '   ' }).issues, '空路径应被拒绝')
   assert.ok(validate('nope').issues, '非对象应被拒绝')
-  assert.ok(validate({ pricing: [] }).issues, '空价目表应被拒绝')
+  // 条目可以为空：规则区独立于条目区，只写 schedules 的文件必须存得下去。
+  // 但**非数组**仍是形状错误，照旧拒绝。
+  assert.equal(validate({ pricing: [] }).issues, undefined, '空价目表是合法的（等于不加任何条目）')
+  assert.ok(validate({ pricing: {} }).issues, '非数组仍应被拒绝')
 })
 
 await test('Config 校验是同步的（cordis 不支持异步校验）', () => {
