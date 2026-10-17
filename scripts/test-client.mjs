@@ -357,6 +357,10 @@ const t = (key, params) => {
     'editor.prices': '单价（每百万 token）',
     'editor.offPeakPrices': '空闲单价（每百万 token）',
     'editor.splitTariff': '区分峰谷',
+    'editor.noEntries': '还没有自定义条目',
+    'editor.providerEmpty': '（未填供应商）',
+    'editor.entryCount': '{count} 条',
+    'editor.toggleProvider': '展开或折叠 {provider}',
     'detail.totalLabel': '合计',
     'detail.totalExact': '精确金额 {value} · 共 {tokens} tokens',
     'detail.convertedNote': '外币已按汇率折算：{rates}。折算合计是参考值，不是实际入账金额。',
@@ -960,9 +964,74 @@ test('不区分峰谷的条目只渲染一行价格', () => {
   assert.doesNotMatch(html, /tf_priceRowLabel">空闲/)
 })
 
-test('只读区把 DeepSeek 两条路由的内置条目都列出来', async () => {
-  // 把账号路由显式列进内置表的意义就在这里：它在界面上是可见的一等公民，
-  // 而不是只能靠 provider 别名悄悄命中官方条目。
+test('条目按供应商分组，组序取首次出现的位置', () => {
+  const entries = [
+    { id: 'a', provider: 'p1', model: 'm1' },
+    { id: 'b', provider: 'p2', model: 'm2' },
+    { id: 'c', provider: 'p1', model: 'm3' },
+  ]
+  const groups = clientExports.groupByProvider(entries)
+  assert.deepEqual(groups.map(group => group.provider), ['p1', 'p2'])
+  // 组内保持原顺序，且每项带着它在原始数组里的下标——编辑与删除仍按下标回写，
+  // 因此折叠只是呈现层的事，不动数据结构。
+  assert.deepEqual(groups[0].items.map(item => [item.entry.id, item.index]), [['a', 0], ['c', 2]])
+  assert.deepEqual(groups[1].items.map(item => [item.entry.id, item.index]), [['b', 1]])
+})
+
+test('还没填供应商的条目自成一组，并显示占位名', () => {
+  assert.deepEqual(clientExports.groupByProvider([{ id: 'a', provider: '', model: '' }]).map(group => group.provider), [''])
+  const html = render(react.createElement(clientExports.ProviderGroup, {
+    provider: '', count: 1, collapsed: false, onToggle: () => {}, t,
+  }, 'body'))
+  assert.match(html, /（未填供应商）/)
+})
+
+test('分组默认展开，折叠后内容不再渲染', () => {
+  const open = render(react.createElement(clientExports.ProviderGroup, {
+    provider: 'p1', count: 2, collapsed: false, onToggle: () => {}, t,
+  }, react.createElement('span', { className: 'inner' }, 'x')))
+  assert.match(open, /<span class="tf_providerName">p1<\/span>/)
+  assert.match(open, /<span class="tf_providerCount">2 条<\/span>/)
+  assert.match(open, /aria-expanded="true"/)
+  assert.match(open, /class="inner"/)
+  assert.doesNotMatch(open, /data-collapsed/)
+
+  const closed = render(react.createElement(clientExports.ProviderGroup, {
+    provider: 'p1', count: 2, collapsed: true, onToggle: () => {}, t,
+  }, react.createElement('span', { className: 'inner' }, 'x')))
+  assert.match(closed, /aria-expanded="false"/)
+  assert.match(closed, /data-collapsed="true"/)
+  assert.doesNotMatch(closed, /class="inner"/, '折叠后不应渲染内容')
+  // 表头必须留着，否则折叠之后再也没法展开。
+  assert.match(closed, /tf_providerToggle/)
+})
+
+test('编辑器把自定义条目按供应商折叠', () => {
+  const three = [
+    { ...FILE_ENTRY, id: 'e1', provider: 'alpha', model: 'm1' },
+    { ...FILE_ENTRY, id: 'e2', provider: 'beta', model: 'm2' },
+    { ...FILE_ENTRY, id: 'e3', provider: 'alpha', model: 'm3' },
+  ]
+  const { ctx, registrations } = fakeClientContext()
+  clientExports.apply(ctx)
+  const section = registrations.find(row => row.options.name === 'settings.section')
+  const html = render(react.createElement(section.component, {
+    t,
+    pricing: fakePricing({ entries: three, fileEntries: three }),
+  }))
+  // 两个供应商各一个表头：alpha 归一组的两个条目，beta 一个。
+  assert.match(html, /<span class="tf_providerName">alpha<\/span>/)
+  assert.match(html, /<span class="tf_providerName">beta<\/span>/)
+  assert.match(html, /<span class="tf_providerCount">2 条<\/span>/)
+  assert.match(html, /<span class="tf_providerCount">1 条<\/span>/)
+  // 条目内容仍在（默认展开）。
+  assert.match(html, /alpha \/ m1/)
+  assert.match(html, /alpha \/ m3/)
+})
+
+test('只读区把 DeepSeek 两条路由的内置条目都列出来', async () => {  // 把账号路由显式列进内置表的意义就在这里：它在界面上是可见的一等公民，
+  // 而不是只能靠 provider 别名悄悄命中官方条目。列表按供应商分组，因此
+  // 两条路由各有一个表头。
   const hostPricing = await import('../lib/pricing.js')
   const { ctx, registrations } = fakeClientContext()
   clientExports.apply(ctx)
@@ -971,10 +1040,11 @@ test('只读区把 DeepSeek 两条路由的内置条目都列出来', async () =
     t,
     pricing: fakePricing({ builtin: hostPricing.BUILTIN_PRICING }),
   }))
-  assert.match(html, /deepseek-official/)
-  assert.match(html, /deepseek-account/, '账号路由应出现在只读的内置价目区')
-  // 账号路由的两个模型都在。
-  assert.equal((html.match(/deepseek-account/g) ?? []).length, 2)
+  assert.match(html, /<span class="tf_providerName">deepseek-official<\/span>/)
+  assert.match(html, /<span class="tf_providerName">deepseek-account<\/span>/, '账号路由应有自己的分组表头')
+  // 每个分组下两条模型，卡片标题仍是「供应商 / 模型」。
+  assert.match(html, /deepseek-account \/ deepseek-flash/)
+  assert.match(html, /deepseek-account \/ deepseek-v4-pro/)
   assert.doesNotMatch(html, /未配置价格/)
 })
 

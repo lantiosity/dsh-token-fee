@@ -97,6 +97,18 @@
 
 面板的「价格设置」页签与 dsh 设置里的「Token 费用」页用的是同一个编辑器，因此下面这些行为两处一致。
 
+### 按供应商折叠
+
+价目条目（自定义与只读内置两段都是）**按供应商分组**，每组一个整宽的表头，写着供应商 id、该组条目数与一个折叠箭头。**默认全部展开**——条目少时先折叠只是多一次点击；条目多起来之后这一层才用来把列表收短。
+
+几条细节：
+
+- **组序取供应商首次出现的位置**，组内保持原顺序，因此新增或编辑条目都不会让已有条目跳位。折叠只影响呈现，数据结构不动——编辑与删除仍按条目在原始数组里的下标回写。
+- **正在编辑的条目所在分组强制展开**：否则点了「编辑」却看不到表单，用户只会以为按钮坏了。折叠的意图让位于正在进行的编辑。
+- 表头是**按钮**而不是装饰性标题：折叠是交互，得能用键盘触发，`aria-expanded` 与实际状态始终一致。
+- `provider` 还没填的新条目自成一组，表头显示「（未填供应商）」。
+- 自定义条目与只读内置条目各折各的，即使两段里有同名供应商。
+
 ### 建议列表
 
 `provider` 与 `model` 是自由输入框，同时带一份来自**当前 dsh 配置**的建议列表（`ctx.llm` 的已注册路由与模型）：`provider` 列出全部已配置路由，`model` 在 `provider` 匹配上之后收窄到该路由的模型，未匹配时列出全部模型。建议只是便利——adapter 允许接受未列出的模型 id，因此输入不受限。
@@ -274,6 +286,18 @@ Field reference:
 ## Editor behaviour
 
 The panel's "Pricing" tab and the "Token fee" page in dsh settings use the same editor, so everything below holds in both places.
+
+### Folded by provider
+
+Pricing entries — in both the custom and the read-only built-in section — are **grouped by provider**, each group with a full-width header showing the provider id, that group's entry count and a collapse caret. **All groups start expanded**: with few entries folding first would only cost a click, so the layer is there to shorten the list once it grows.
+
+A few details:
+
+- **Group order follows where each provider first appears**, and entries keep their original order inside a group, so adding or editing an entry never makes existing ones jump. Folding is presentation only and does not touch the data — editing and deleting still write back by each entry's index in the original array.
+- **A group holding the entry being edited is forced open**: otherwise clicking "Edit" would show no form and the user would think the button was broken. The intent to fold yields to an edit in progress.
+- The header is a **button**, not a decorative title: folding is an interaction and has to be keyboard-reachable, so `aria-expanded` always matches the real state.
+- A new entry whose `provider` is still empty forms its own group, headed "(no provider yet)".
+- Custom and read-only built-in entries fold independently, even when both contain the same provider.
 
 ### Suggestions
 
