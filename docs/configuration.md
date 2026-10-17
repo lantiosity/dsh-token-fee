@@ -137,6 +137,10 @@
 
 条目对命名调度（`schedules` 里的名字）的引用在编辑往返中原样保留：GET 端点同时返回归一化层与原始层，编辑器草稿用原始层，因此改一处规则仍然会传播到引用它的所有条目。
 
+### 规则表单的排布
+
+规则表单里**时区与法定节假日并排一行，高峰星期独占一行**。这不是随手排的：7 个星期按钮本身要 214px（7 × 28px + 6 × 3px 间距），挤在两列网格的一列里，价格设置面板的宽度下限会被顶到 460px 以上；独占一行之后下限回到四列单价表那边（约 380px），面板因此能收到 440px。`test-client.mjs` 断言了「星期按钮行之前网格必须已闭合」，把它放回网格里会立刻失败。
+
 ### 规则下拉框
 
 条目表单里的「峰谷规则」下拉框始终可用：选中一个规则就等于开启峰谷（空闲价以高峰价为初值，你只需改需要改的那一档），选回「统一单价」则清掉空闲价与引用。规则区里新增的规则**不要求先被条目引用**——「先建规则、再挂到条目上」是正常的操作顺序，未被引用的规则会照常写进文件，删除只由规则卡片上的 ✕ 触发。
@@ -336,6 +340,10 @@ Before saving, the client also blocks three states that the UI can construct but
 ### Reference round-trips
 
 An entry's reference to a named schedule (a name in `schedules`) survives editing round-trips verbatim: the GET endpoint returns both the normalized and the raw layer, and the editor draft uses the raw one, so editing a rule still propagates to every entry referencing it.
+
+### How the schedule form is laid out
+
+In the schedule form, **timezone and public holidays share one row, and the peak weekdays get a row of their own**. That is deliberate: the seven weekday buttons need 214px (7 × 28px plus 6 × 3px of gap), and squeezing them into one column of a two-column grid pushes the pricing panel's width floor above 460px; on their own row the floor drops back to the four-column price table (about 380px), which is what lets the panel sit at 440px. `test-client.mjs` asserts that the grid has closed before the weekday row, so nesting it back inside fails immediately.
 
 ### The schedule dropdown
 

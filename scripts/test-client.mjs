@@ -1149,6 +1149,29 @@ test('只读区把内置条目按供应商列出', async () => {
   assert.doesNotMatch(cards, /未配置价格/)
 })
 
+test('高峰星期独占一行，不与时区挤在同一网格里', () => {
+  // 7 个星期按钮本身要 214px；挤在两列网格的一列里会把价格设置面板的宽度下限
+  // 顶到 460px 以上。独占一行后下限回到四列单价表那边（约 380px）。
+  const html = renderScheduleEditor()
+  const days = /<div class="tf_days">/.exec(html)
+  assert.ok(days !== null, '应有星期按钮行')
+  // 星期按钮行之前应是一段把网格关掉的标记，而不是仍留在 `.tf_grid2` 内部：
+  // 取网格开始与星期行之间的片段，其中必须出现网格的闭合。
+  const grid = html.indexOf('<div class="tf_grid2">')
+  assert.ok(grid >= 0, '时区与节假日应并排在一行里')
+  assert.ok(grid < days.index, '网格应排在星期按钮行之前')
+  const between = html.slice(grid, days.index)
+  // 从网格开头到星期行之间，**未闭合的** `<div>` 只应有 1 个——就是星期按钮自己
+  // 那层 `.tf_field` 包装（它当然还没闭合）。若是 2 个，多出来的那个就是网格本身，
+  // 说明星期行仍留在网格内部。比逐个匹配闭合标签可靠。
+  const opens = (between.match(/<div\b/g) ?? []).length
+  const closes = (between.match(/<\/div>/g) ?? []).length
+  assert.equal(opens - closes, 1, `星期行之前网格应已闭合（<div> ${opens} / </div> ${closes}）`)
+  // 时区与法定节假日同处那一个网格里。
+  assert.match(between, /tf_fieldLabel">时区</)
+  assert.match(between, /tf_fieldLabel">法定节假日</)
+})
+
 test('时区使用带 UTC 偏移的下拉框', () => {
   // 规则默认收起，因此直接渲染规则表单，而不是走收敛态的卡片。
   const html = renderScheduleEditor()
@@ -1675,7 +1698,7 @@ test('面板宽度按标签页区分', () => {
   const cssText = styleTags[0].textContent
   // 明细只有合计与几张卡片，撑到价格设置的宽度会显得空。
   assert.match(cssText, /\.tf_panel\[data-tab=detail\]\{width:max-content/)
-  assert.match(cssText, /\.tf_panel\[data-tab=pricing\]\{width:min\(560px/)
+  assert.match(cssText, /\.tf_panel\[data-tab=pricing\]\{width:min\(440px/)
 })
 
 test('host 与浏览器两侧的费用换算结果一致', async () => {
