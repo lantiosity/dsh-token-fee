@@ -2316,6 +2316,8 @@ test('明细面板给子代理单独成组，合计含子代理', () => {
   assert.match(html, /合计（含子代理）/)
   assert.match(html, /子代理（1）/)
   assert.match(html, /实现功能/)
+  // 组标题的 token 数取子代理合计视图；取错键会显示成 `NaNM`（实测过）。
+  assert.doesNotMatch(html, /NaN/, '子代理组标题不该出现 NaN')
   // 子代理的钱不能同时出现在供应商分组里（那会重复计数）。
   assert.equal((html.match(/tf_groupName/g) ?? []).length, 2, '只应有本会话的供应商组 + 子代理组')
   const exact = /<div class="tf_totalExact">([^<]*)<\/div>/.exec(html)

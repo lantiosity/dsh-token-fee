@@ -73,16 +73,18 @@ background: var(--dsw-alias-bg-layer-3);
 
 ## 子代理用量的取数面
 
-子代理跑在**自己的会话**里，用量不在父会话的事件流中——所以 `tokenFee` 投影（以及官方的 `tokenUsage`）天然只统计本会话。要让子代理计入合计，就得按会话 id 另外去读，插件为此用了四个内部面，每个都**可选**（服务缺失时降级为「读不到」，面板里如实列出未计入的数量，不抛错也不当成 0）：
+子代理跑在**自己的会话**里，用量不在父会话的事件流中——所以 `tokenFee` 投影（以及官方的 `tokenUsage`）天然只统计本会话。要让子代理计入合计，就得按会话 id 另外去读，插件为此用了两个内部面，都**可选**（缺失时降级为「读不到」，面板里如实列出未计入的数量，不抛错也不当成 0）：
 
 | 面 | 用途 | 缺失时 |
 |---|---|---|
-| 客户端 `useProjection('subagentCatalog')` | 直接子会话的 `id` / `label` / `mode` | 返回 `undefined`，按「没有子代理」处理（DST 的投影套件对未装载的能力统一返回 `undefined`，不抛） |
-| host `ctx.sessions.get(id)` | 判断子会话是否还活着 | 走冷会话那条路 |
-| host `ctx.sessionProjections.snapshot(session, ['tokenFee'])` | **活**子代理：内存里折叠出当前值，不读盘 | 该行记 `no-registry` |
-| host `ctx.sessionProjectionCache.cachedSnapshot(header, ['tokenFee'])` + `ctx.sessionQuery.listSessions()` | **已结束**子代理：读持久化检查点；检查点在会话销毁时必写，因此那份值是完整的 | 记 `no-session` / `no-cache` |
+| 客户端 `useProjection('subagentCatalog')` | 直接子会话的 `id` / `label` / `mode` | 返回 `undefined`，按「没有子代理」处理（投影套件对未装载的能力统一返回 `undefined`，不抛） |
+| host `ctx.sessionQuery.observeSession(id, { projectionMode: 'all' })` | 该会话的完整观测：日志、`header`、`inheritedEventCount`，活会话与已结束会话走同一条路 | 该行记 `no-query` |
 
-两条路分开走是因为时效性不同：活会话要的是「此刻」，冷会话要的是「结束时」。端点 `GET /api/token-fee/subagents?ids=…` 只回原始用量行，换算仍由浏览器半用与自身用量**完全相同**的那套 `computeView` 做——因此子代理的峰谷判定、多币种、未定价计数与主会话口径一致，不会各算一套（投影子系统也明确「不做客户端折叠」）。目录投影只给**直接**子会话，嵌套子代理由各自的父会话计入，因此合计天然覆盖整棵子树。
+端点 `GET /api/token-fee/subagents?ids=…` 只回原始用量行，换算仍由浏览器半用与自身用量**完全相同**的那套 `computeView` 做——因此子代理的峰谷判定、多币种、未定价计数与主会话口径一致，不会各算一套（投影子系统也明确「不做客户端折叠」）。目录投影只给**直接**子会话，嵌套子代理由各自的父会话计入，因此合计天然覆盖整棵子树。
+
+**seeded 子会话只折自己那段**。DSH 以「新建会话 id + 把父会话的事件当种子写进子会话日志」的方式启动 fork 与子代理会话。整段折叠会把父会话的用量在每个子会话里各重放一遍：实测一条会话带四个子代理时，四张卡片各自显示同样的 `1068.6M token`，合计被放大到四千多万倍之外（实为 1.37M）。因此端点只用 `seq >= inheritedEventCount` 的**后缀**折叠，但**保留**种子里的非用量事件（`request/header` 决定路由，整段跳掉会让子会话自己的请求折不出任何行）。父会话那一份永远由父会话自己的视图负责——`dsh-usage-stats` 处理同一问题时要额外判断「父会话存活日志是否仍覆盖种子范围」（它的场景是跨会话总账，压缩后子会话可能是唯一副本），本插件不需要这段判断。
+
+还有一处坑：`tokenFee` 的投影视图是 `{ rows, route }` **对象**而不是裸数组。端点早先把整块当 `rows` 回给客户端，客户端的 `Array.isArray` 判定失败，于是所有子代理都显示「读不到用量」。
 
 ## 模块解析
 
@@ -167,13 +169,15 @@ The browser half is a hand-written `window.__ModuleLoader__.load({ id, factory }
 
 ## Reading subagent usage
 
-A subagent runs in **its own session**, so its usage never enters the parent's event stream — the `tokenFee` projection (like the built-in `tokenUsage`) therefore only ever counts this session. Counting subagents means reading them by session id, which uses four internal surfaces, each **optional** (a missing service degrades to "unreadable", the panel states how many were left out, and nothing throws or silently reads as zero):
+A subagent runs in **its own session**, so its usage never enters the parent's event stream — the `tokenFee` projection (like the built-in `tokenUsage`) therefore only ever counts this session. Counting subagents means reading them by session id, which uses two internal surfaces, both **optional** (a missing service degrades to "unreadable", the panel states how many were left out, and nothing throws or silently reads as zero):
 
 | Surface | Purpose | When absent |
 |---|---|---|
 | Client `useProjection('subagentCatalog')` | Direct children's `id` / `label` / `mode` | Returns `undefined`, treated as "no subagents" (the projection kit returns `undefined` for every unmounted capability rather than throwing) |
-| Host `ctx.sessions.get(id)` | Whether the child session is still live | Falls back to the cold path |
-| Host `ctx.sessionProjections.snapshot(session, ['tokenFee'])` | A **live** child: folds the current value in memory, no disk read | Row is marked `no-registry` |
-| Host `ctx.sessionProjectionCache.cachedSnapshot(header, ['tokenFee'])` + `ctx.sessionQuery.listSessions()` | A **finished** child: reads the durable checkpoint, which is mandatory at session disposal and therefore complete | Marked `no-session` / `no-cache` |
+| Host `ctx.sessionQuery.observeSession(id, { projectionMode: 'all' })` | The complete observation — log, `header`, `inheritedEventCount` — through one path for live and finished sessions alike | Row is marked `no-query` |
 
-The two paths exist because their currency differs: a live session wants "right now", a cold one wants "as it ended". The `GET /api/token-fee/subagents?ids=…` endpoint returns raw usage rows only; the conversion still happens in the browser half through the **same** `computeView` used for its own usage — so peak/off-peak decisions, multi-currency handling and unpriced counts match the main session exactly, with no second implementation (the projection subsystem explicitly forbids client-side folding). The catalog lists **direct** children only; nested subagents are counted by their own parent, so the total naturally covers the whole subtree.
+The `GET /api/token-fee/subagents?ids=…` endpoint returns raw usage rows only; the conversion still happens in the browser half through the **same** `computeView` used for its own usage — so peak/off-peak decisions, multi-currency handling and unpriced counts match the main session exactly, with no second implementation (the projection subsystem explicitly forbids client-side folding). The catalog lists **direct** children only; nested subagents are counted by their own parent, so the total naturally covers the whole subtree.
+
+**A seeded child is folded over its own suffix only.** DSH starts a fork or a subagent session by minting a new session id and writing the parent's events into the child's log as a seed. Folding the whole log replays the parent's usage inside every child: one session with four subagents made each card report the same `1068.6M` tokens, inflating the group roughly three thousandfold (the real figure was 1.37M). The endpoint therefore folds only `seq >= inheritedEventCount`, while **keeping** the seeded non-usage events such as `request/header`, which establish the route — dropping the whole seed leaves the child's own requests without a route and yields no rows at all. The parent's own share is never re-derived here; the parent's view owns it, which is also why `dsh-usage-stats` needs an extra "does the parent's surviving log still cover the seed" test for its cross-session ledger and this plugin does not.
+
+One more trap: the `tokenFee` projection view is a `{ rows, route }` **object**, not a bare array. The endpoint originally forwarded it whole as `rows`, the client's `Array.isArray` check failed, and every subagent showed "usage unavailable".

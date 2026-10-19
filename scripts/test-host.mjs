@@ -177,22 +177,59 @@ async function getRoute(route, url) {
   return response
 }
 
+await test('子代理端点只算子会话自己那段，不重算父会话的种子', async () => {
+  // DSH 以「新建会话 id + 把父会话事件当种子写进子会话日志」启动 fork / 子代理会话。
+  // 整段折叠会把父会话的钱在每个子会话里各算一遍——实测一个会话带四个子代理时，
+  // 四个卡片各自显示同样的 1068.6M token / ¥48.16，合计直接四倍。
+  const header = { id: 'child', createdAt: 1 }
+  const events = [
+    // 种子：路由（必须照常折叠，否则子会话自己的请求没有 route）+ 父会话的用量
+    { seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'deepseek-official', model: 'deepseek-flash' } } } },
+    { seq: 1, type: 'assistant/message', time: 2, data: { turn: 1, step: 1, usage: { inputTokens: 1_000_000 } } },
+    // 子会话自己的一段
+    { seq: 2, type: 'assistant/message', time: 3, data: { turn: 1, step: 2, usage: { inputTokens: 2_000_000 } } },
+  ]
+  const available = {
+    sessionQuery: {
+      async observeSession() {
+        return {
+          source: 'prepared',
+          header,
+          inheritedEventCount: 2,
+          events,
+          [Symbol.dispose]() {},
+        }
+      },
+    },
+  }
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'], available)
+  apply(context, undefined)
+  const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
+  const response = await getRoute(route, '/api/token-fee/subagents?ids=child')
+  const [row] = response.payload.children
+  assert.equal(response.status, 200)
+  assert.ok(Array.isArray(row.rows), `rows 应是数组：${JSON.stringify(row)}`)
+  const tokens = row.rows.reduce((sum, item) => sum + item.input + item.cacheRead + item.cacheWrite + item.output, 0)
+  assert.equal(tokens, 2_000_000, `只该算子会话自己的 2M，实际 ${tokens}（种子被重算就是 3M）`)
+})
+
 await test('子代理端点按会话观测返回用量，并释放观测', async () => {
-  // 走 `sessionQuery.observeSession(id)`：它对活会话与已结束会话统一处理——最初按
-  // `ctx.sessions.get` + 投影缓存自己拼的那版在真实环境里子代理全部读不到用量。
-  const rows = [{ provider: 'p', model: 'm', tariff: 'peak', input: 10, cacheRead: 0, cacheWrite: 0, output: 0 }]
+  // 走 `sessionQuery.observeSession(id)`：它对活会话与已结束会话统一处理，再按
+  // `inheritedEventCount` 只折会话自己那段——最初按 `ctx.sessions.get` + 投影缓存
+  // 拼的那版在真实环境里子代理全部读不到用量。
   const disposed = []
+  const seedHeader = { seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'p', model: 'm' } } } }
+  const message = { seq: 1, type: 'assistant/message', time: 2, data: { turn: 1, step: 1, usage: { inputTokens: 10 } } }
   const available = {
     sessionQuery: {
       async observeSession(id) {
         if (id === 'boom') throw new Error('会话不存在')
         return {
           source: 'prepared',
-          // 真实投影视图是 `{ rows, route }` 而不是裸数组：最初整块当 rows 传回去，
-          // 客户端的 Array.isArray 判定失败，于是所有子代理都显示「读不到用量」。
-          projections: id === 'empty'
-            ? { asOfSeq: 1, values: {} }
-            : { asOfSeq: 2, values: { tokenFee: { rows, route: { provider: 'p', model: 'm' } } } },
+          header: { id, createdAt: 1 },
+          inheritedEventCount: 0,
+          // 'empty' 有观测但没有用量事件：应落成 no-usage 而不是报错。
+          events: id === 'empty' ? [seedHeader] : [seedHeader, message],
           [Symbol.dispose]() {
             disposed.push(id)
           },
@@ -207,7 +244,9 @@ await test('子代理端点按会话观测返回用量，并释放观测', async
   assert.equal(response.status, 200)
   const [live, empty, boom] = response.payload.children
   assert.equal(live.id, 'live')
-  assert.deepEqual(live.rows, rows, '观测到的用量行应原样带回')
+  assert.deepEqual(live.rows, [
+    { provider: 'p', model: 'm', tariff: 'flat', input: 10, cacheRead: 0, cacheWrite: 0, output: 0 },
+  ], '折出的行应原样带回')
   assert.equal(live.source, 'prepared')
   assert.equal(empty.rows, null)
   assert.match(empty.reason, /^no-usage/)
