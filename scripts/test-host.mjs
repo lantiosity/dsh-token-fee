@@ -149,10 +149,16 @@ await test('apply 注册投影与三个端点', () => {
   ])
 })
 
-/** 驱动一个 GET 端点并等它写出响应。 */
-async function getRoute(route) {
+/**
+ * 驱动一个 GET 端点并等它写出响应。
+ * @param route - 要驱动的路由。
+ * @param url - 可选的请求路径（含查询串）；不给时只有 `/`。
+ * @returns 响应替身。
+ */
+async function getRoute(route, url) {
   const request = {
     method: 'GET',
+    url,
     headers: { host: '127.0.0.1:3080', accept: 'application/json' },
     socket: { remoteAddress: '127.0.0.1' },
     async *[Symbol.asyncIterator]() {},
@@ -170,6 +176,56 @@ async function getRoute(route) {
   await route.handler(request, response)
   return response
 }
+
+await test('子代理端点按会话观测返回用量，并释放观测', async () => {
+  // 走 `sessionQuery.observeSession(id)`：它对活会话与已结束会话统一处理——最初按
+  // `ctx.sessions.get` + 投影缓存自己拼的那版在真实环境里子代理全部读不到用量。
+  const rows = [{ provider: 'p', model: 'm', tariff: 'peak', input: 10, cacheRead: 0, cacheWrite: 0, output: 0 }]
+  const disposed = []
+  const available = {
+    sessionQuery: {
+      async observeSession(id) {
+        if (id === 'boom') throw new Error('会话不存在')
+        return {
+          source: 'prepared',
+          // 真实投影视图是 `{ rows, route }` 而不是裸数组：最初整块当 rows 传回去，
+          // 客户端的 Array.isArray 判定失败，于是所有子代理都显示「读不到用量」。
+          projections: id === 'empty'
+            ? { asOfSeq: 1, values: {} }
+            : { asOfSeq: 2, values: { tokenFee: { rows, route: { provider: 'p', model: 'm' } } } },
+          [Symbol.dispose]() {
+            disposed.push(id)
+          },
+        }
+      },
+    },
+  }
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'], available)
+  apply(context, undefined)
+  const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
+  const response = await getRoute(route, '/api/token-fee/subagents?ids=live,empty,boom')
+  assert.equal(response.status, 200)
+  const [live, empty, boom] = response.payload.children
+  assert.equal(live.id, 'live')
+  assert.deepEqual(live.rows, rows, '观测到的用量行应原样带回')
+  assert.equal(live.source, 'prepared')
+  assert.equal(empty.rows, null)
+  assert.match(empty.reason, /^no-usage/)
+  assert.equal(boom.rows, null)
+  assert.match(boom.reason, /^observe-failed/)
+  // 观测对象必须释放，否则会一直持有那个会话。
+  assert.deepEqual(disposed.sort(), ['empty', 'live'])
+})
+
+await test('缺 sessionQuery 时子代理端点说明原因而不是报错', async () => {
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'], {})
+  apply(context, undefined)
+  const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
+  const response = await getRoute(route, '/api/token-fee/subagents?ids=abc')
+  assert.equal(response.status, 200, '缺服务也要 200，面板才能显示原因')
+  assert.equal(response.payload.children[0].reason, 'no-query')
+  assert.equal(response.payload.children[0].rows, null)
+})
 
 await test('价目表一变，投影状态版本就变，订阅者也收到通知', async () => {
   // 折叠会把「样本属于哪个时段」写进持久化状态，而那是纯粹由价目表决定的派生值。

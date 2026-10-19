@@ -270,10 +270,13 @@ try {
     if (row === undefined) throw new Error(`应回一行：${JSON.stringify(missingBody)}`)
     if (row.id !== 'does-not-exist') throw new Error(`id 应原样带回：${row.id}`)
     if (row.rows !== null) throw new Error(`未知会话不该有用量行：${JSON.stringify(row)}`)
-    // 原因恰好是 `no-session`（而不是 `no-cache` / `no-registry`）本身就说明了
-    // `sessionProjectionCache` 这个服务在真实进程里解析得到——服务改名会变成 no-cache。
-    if (row.reason !== 'no-session') {
-      throw new Error(`期望 no-session（说明投影缓存服务可用），得到 ${JSON.stringify(row)}`)
+    // 原因要么是 `observe-failed: …`（会话不存在），要么是 `no-session`。关键是它
+    // **不是** `no-query`：那说明 `sessionQuery` 这个服务在真实进程里解析得到。
+    if (typeof row.reason !== 'string' || row.reason === '') {
+      throw new Error(`读不到时必须给出原因：${JSON.stringify(row)}`)
+    }
+    if (row.reason === 'no-query') {
+      throw new Error(`sessionQuery 服务缺失，子代理用量将永远读不到：${JSON.stringify(row)}`)
     }
 
     // 非回环 Host 被拒（与其它端点同一套守卫）。
