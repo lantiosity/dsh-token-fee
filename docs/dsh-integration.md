@@ -71,6 +71,19 @@ background: var(--dsw-alias-bg-layer-3);
 
 **图标按名字可用性取用**：`ui-primitives` 的图标命名换过一次口径——0.1.5-rc.1 至 0.1.6-alpha.2 把尺寸写进名字（`IconDatabaseOutline16`），0.1.7-alpha.1 起改成写字重（`IconDatabaseOutlineRegular`/`Medium`）。插件两套名字都试（先取与旧命名观感一致的 `Regular` 档），都取不到时降级为不画图标。**缺图标不能连累胶囊**：把 `undefined` 当组件交给 React 会抛「Element type is invalid」，那会炸掉整个 occupant，整枚胶囊连同面板一起消失——而实际缺的只是一个装饰性图标。这条是按可用性回退而不是按版本分支，因为插件在浏览器侧拿不到 DSH 版本号。
 
+## 子代理用量的取数面
+
+子代理跑在**自己的会话**里，用量不在父会话的事件流中——所以 `tokenFee` 投影（以及官方的 `tokenUsage`）天然只统计本会话。要让子代理计入合计，就得按会话 id 另外去读，插件为此用了四个内部面，每个都**可选**（服务缺失时降级为「读不到」，面板里如实列出未计入的数量，不抛错也不当成 0）：
+
+| 面 | 用途 | 缺失时 |
+|---|---|---|
+| 客户端 `useProjection('subagentCatalog')` | 直接子会话的 `id` / `label` / `mode` | 返回 `undefined`，按「没有子代理」处理（DST 的投影套件对未装载的能力统一返回 `undefined`，不抛） |
+| host `ctx.sessions.get(id)` | 判断子会话是否还活着 | 走冷会话那条路 |
+| host `ctx.sessionProjections.snapshot(session, ['tokenFee'])` | **活**子代理：内存里折叠出当前值，不读盘 | 该行记 `no-registry` |
+| host `ctx.sessionProjectionCache.cachedSnapshot(header, ['tokenFee'])` + `ctx.sessionQuery.listSessions()` | **已结束**子代理：读持久化检查点；检查点在会话销毁时必写，因此那份值是完整的 | 记 `no-session` / `no-cache` |
+
+两条路分开走是因为时效性不同：活会话要的是「此刻」，冷会话要的是「结束时」。端点 `GET /api/token-fee/subagents?ids=…` 只回原始用量行，换算仍由浏览器半用与自身用量**完全相同**的那套 `computeView` 做——因此子代理的峰谷判定、多币种、未定价计数与主会话口径一致，不会各算一套（投影子系统也明确「不做客户端折叠」）。目录投影只给**直接**子会话，嵌套子代理由各自的父会话计入，因此合计天然覆盖整棵子树。
+
 ## 模块解析
 
 **配置 schema 是手写的 Standard Schema**：契约要求插件导出 `Config`，而 cordis 只调用 `Config['~standard'].validate`（`vendor/cordis/src/fiber.ts`）。这里没有 `import '@deepseek-ai/schemastery'`，因为本插件以 link 方式安装，Node 从插件真实路径逐级向上找 `node_modules`，够不到 `$DSH_HOME/profiles/node_modules`（实测 `ERR_MODULE_NOT_FOUND`），引入该包会让插件装载失败。手写的校验器同样在装载期报错、填默认值并拒绝未知键。
@@ -151,3 +164,16 @@ Note that DSH's own code carries dangling references of the same kind (`ui-jobs`
 **The config schema is a hand-written Standard Schema**: the contract requires the plugin to export `Config`, and cordis only calls `Config['~standard'].validate` (`vendor/cordis/src/fiber.ts`). There is no `import '@deepseek-ai/schemastery'` here because the plugin is link-installed: Node walks up from the plugin's real path looking for `node_modules` and never reaches `$DSH_HOME/profiles/node_modules` (measured as `ERR_MODULE_NOT_FOUND`), so importing that package would make the plugin fail to load. The hand-written validator still errors at load time, fills defaults and rejects unknown keys.
 
 The browser half is a hand-written `window.__ModuleLoader__.load({ id, factory })` bundle with no build step. It only `require`s four specifiers from the platform module table (`react`, `react/jsx-runtime`, `react-dom`, `@deepseek-ai/dsh-client-ui-primitives`), so it needs no `dsh.client.external`.
+
+## Reading subagent usage
+
+A subagent runs in **its own session**, so its usage never enters the parent's event stream — the `tokenFee` projection (like the built-in `tokenUsage`) therefore only ever counts this session. Counting subagents means reading them by session id, which uses four internal surfaces, each **optional** (a missing service degrades to "unreadable", the panel states how many were left out, and nothing throws or silently reads as zero):
+
+| Surface | Purpose | When absent |
+|---|---|---|
+| Client `useProjection('subagentCatalog')` | Direct children's `id` / `label` / `mode` | Returns `undefined`, treated as "no subagents" (the projection kit returns `undefined` for every unmounted capability rather than throwing) |
+| Host `ctx.sessions.get(id)` | Whether the child session is still live | Falls back to the cold path |
+| Host `ctx.sessionProjections.snapshot(session, ['tokenFee'])` | A **live** child: folds the current value in memory, no disk read | Row is marked `no-registry` |
+| Host `ctx.sessionProjectionCache.cachedSnapshot(header, ['tokenFee'])` + `ctx.sessionQuery.listSessions()` | A **finished** child: reads the durable checkpoint, which is mandatory at session disposal and therefore complete | Marked `no-session` / `no-cache` |
+
+The two paths exist because their currency differs: a live session wants "right now", a cold one wants "as it ended". The `GET /api/token-fee/subagents?ids=…` endpoint returns raw usage rows only; the conversion still happens in the browser half through the **same** `computeView` used for its own usage — so peak/off-peak decisions, multi-currency handling and unpriced counts match the main session exactly, with no second implementation (the projection subsystem explicitly forbids client-side folding). The catalog lists **direct** children only; nested subagents are counted by their own parent, so the total naturally covers the whole subtree.

@@ -49,6 +49,7 @@ try {
 const BASE = `http://127.0.0.1:${PORT}`
 const PRICING = `${BASE}/api/token-fee/pricing`
 const RESET = `${BASE}/api/token-fee/pricing/reset`
+const SUBAGENTS = `${BASE}/api/token-fee/subagents`
 const ACTION_HEADER = 'x-dsh-token-fee-action'
 const START_TIMEOUT_MS = 120_000
 const PROBE_CURRENCY = 'CNY'
@@ -248,6 +249,42 @@ try {
     if (!Array.isArray(body.holidaySets?.cn?.holidays) || body.holidaySets.cn.holidays.length === 0) {
       throw new Error(`节假日数据未随快照返回：${JSON.stringify(body.holidaySets)}`)
     }
+  })
+
+  await test('子代理用量端点在真实装载路径下应答并优雅降级', async () => {
+    // 端点要读四个内部面（sessions / sessionProjections / sessionProjectionCache /
+    // sessionQuery）。这里在**真实进程**里确认路由确实注册上了、并且读不到时会
+    // 如实回 reason 而不是抛 500——服务改名或签名变化都会在这里露出来。
+    const empty = await fetchWithTimeout(SUBAGENTS)
+    if (empty.status !== 200) throw new Error(`空 ids 期望 200，得到 ${empty.status}`)
+    const emptyBody = await empty.json()
+    if (emptyBody.ok !== true) throw new Error(`ok 不为 true：${JSON.stringify(emptyBody)}`)
+    if (!Array.isArray(emptyBody.children) || emptyBody.children.length !== 0) {
+      throw new Error(`空 ids 应回空数组：${JSON.stringify(emptyBody)}`)
+    }
+
+    const missing = await fetchWithTimeout(`${SUBAGENTS}?ids=does-not-exist`)
+    if (missing.status !== 200) throw new Error(`未知会话期望 200，得到 ${missing.status}`)
+    const missingBody = await missing.json()
+    const row = missingBody.children?.[0]
+    if (row === undefined) throw new Error(`应回一行：${JSON.stringify(missingBody)}`)
+    if (row.id !== 'does-not-exist') throw new Error(`id 应原样带回：${row.id}`)
+    if (row.rows !== null) throw new Error(`未知会话不该有用量行：${JSON.stringify(row)}`)
+    // 原因恰好是 `no-session`（而不是 `no-cache` / `no-registry`）本身就说明了
+    // `sessionProjectionCache` 这个服务在真实进程里解析得到——服务改名会变成 no-cache。
+    if (row.reason !== 'no-session') {
+      throw new Error(`期望 no-session（说明投影缓存服务可用），得到 ${JSON.stringify(row)}`)
+    }
+
+    // 非回环 Host 被拒（与其它端点同一套守卫）。
+    const foreign = await requestWithHost(`${SUBAGENTS}?ids=x`, 'evil.example.com')
+    if (foreign !== 403) throw new Error(`非回环 Host 期望 403，得到 ${foreign}`)
+    // 写入方法被拒。
+    const posted = await fetchWithTimeout(SUBAGENTS, { method: 'POST' })
+    if (posted.status !== 405) throw new Error(`POST 期望 405，得到 ${posted.status}`)
+
+    const alive = await fetchWithTimeout(PRICING)
+    if (alive.status !== 200) throw new Error('探测子代理端点后价目端点不再应答')
   })
 
   await test('缺少动作头的写请求被拒绝且进程存活', async () => {

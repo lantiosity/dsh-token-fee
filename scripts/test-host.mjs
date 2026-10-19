@@ -137,7 +137,7 @@ await test('非法展示币种在装载时失败', () => {
   assert.throws(() => resolveConfig({ displayCurrency: 'RMB' }), /displayCurrency/)
 })
 
-await test('apply 注册投影与两个端点', () => {
+await test('apply 注册投影与三个端点', () => {
   const { context, captured } = fakeContext()
   apply(context, undefined)
   assert.equal(captured.projections.length, 1)
@@ -145,6 +145,7 @@ await test('apply 注册投影与两个端点', () => {
   assert.deepEqual(captured.routes.map(route => route.path).sort(), [
     '/api/token-fee/pricing',
     '/api/token-fee/pricing/reset',
+    '/api/token-fee/subagents',
   ])
 })
 

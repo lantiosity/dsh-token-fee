@@ -369,6 +369,12 @@ const t = (key, params) => {
     'editor.entryCount': '{count} 条',
     'editor.toggleProvider': '展开或折叠 {provider}',
     'detail.totalLabel': '合计',
+    'detail.totalLabelWithSubagents': '合计（含子代理）',
+    'subagents.title': '子代理（{count}）',
+    'subagents.toggle': '展开或收起 {label} 的用量明细',
+    'subagents.unreadable': '读不到用量',
+    'subagents.missing': '{count} 个子代理的用量暂时读不到，未计入合计。',
+    'subagents.error': '子代理用量读取失败：{message}',
     'detail.totalExact': '精确金额 {value} · 共 {tokens} tokens',
     'detail.convertedNote': '外币已按汇率折算：{rates}。折算合计是参考值，不是实际入账金额。',
     'detail.missingRate': '另有 {value} 未折算进合计：未配置 {codes} 的汇率。在插件配置里加 exchangeRates 即可并入。',
@@ -2261,6 +2267,92 @@ test('明细面板把「未记录时段」的用量说出来', () => {  const ro
   const html = render(react.createElement(clientExports.FeeDetail, { view, t, pricingError: null, onConfigure: () => {} }))
   assert.match(html, /tf_badge" data-warn="true">1M 未记录时段</)
   assert.match(html, /有 1,000,000 tokens 是在峰谷规则生效之前记录的/)
+})
+
+test('子代理用量按会话折成卡片，读不到的记一笔', () => {
+  // 子代理跑在自己的会话里，用量不在本会话的事件流里，因此要按 id 单独取回。
+  // 取不到时如实记数——少算的钱要说得出为什么少，而不是当成 0。
+  const catalog = [
+    { id: 's1', createdAt: 1, mode: 'continuable', label: '审查代码' },
+    { id: 's2', createdAt: 2, mode: 'one-shot' },
+  ]
+  const children = [
+    { id: 's1', rows: [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }], source: 'live' },
+    { id: 's2', rows: null, source: null, reason: 'no-session' },
+  ]
+  const result = clientExports.subagentViews(children, catalog, [SPLIT_BUILTIN], 'CNY', {})
+  assert.equal(result.cards.length, 2)
+  assert.equal(result.cards[0].label, '审查代码', '标签取自目录投影')
+  assert.equal(result.cards[0].mode, 'continuable')
+  // 与自身用量同一套换算：内置 flash 高峰 2 元/百万。
+  assert.equal(result.cards[0].view.amount, 2)
+  assert.equal(result.cards[0].view.tokens, 1_000_000)
+  // 没有 label 时退回会话 id，而不是显示成空白。
+  assert.equal(result.cards[1].label, 's2')
+  assert.equal(result.cards[1].view, null)
+  assert.equal(result.cards[1].reason, 'no-session')
+  assert.equal(result.missing, 1)
+  // 只有真拿到行的那一个进合计。
+  assert.equal(result.rows.length, 1)
+  assert.equal(result.total.amount, 2)
+})
+
+test('明细面板给子代理单独成组，合计含子代理', () => {
+  const ownRows = [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }]
+  const childRows = [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 2_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }]
+  const entries = [SPLIT_BUILTIN]
+  const view = clientExports.computeView({ rows: ownRows }, entries, 'CNY', {})
+  const subagents = clientExports.subagentViews(
+    [{ id: 's1', rows: childRows, source: 'live' }],
+    [{ id: 's1', createdAt: 1, mode: 'continuable', label: '实现功能' }],
+    entries, 'CNY', {},
+  )
+  // 合计从原始行重算，而不是把两个视图相加。
+  const total = clientExports.computeView({ rows: [...ownRows, ...childRows] }, entries, 'CNY', {})
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view, total, subagents, exchangeRates: {}, t, pricingError: null, onConfigure: () => {},
+  }))
+  // 标题改成「含子代理」，让人知道这个数不只是自己的。
+  assert.match(html, /合计（含子代理）/)
+  assert.match(html, /子代理（1）/)
+  assert.match(html, /实现功能/)
+  // 子代理的钱不能同时出现在供应商分组里（那会重复计数）。
+  assert.equal((html.match(/tf_groupName/g) ?? []).length, 2, '只应有本会话的供应商组 + 子代理组')
+  const exact = /<div class="tf_totalExact">([^<]*)<\/div>/.exec(html)
+  assert.match(exact[1], new RegExp(total.amount.toFixed(2).replace('.', '\\.')), `合计应含子代理：${exact[1]}`)
+  // 子代理卡片默认收起：明细要点开才出现。
+  assert.doesNotMatch(html, /deepseek-official<\/span><span class="tf_rowTokens">/)
+})
+
+test('没有子代理时合计标题不变', () => {
+  const view = clientExports.computeView(
+    { rows: [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }] },
+    [SPLIT_BUILTIN], 'CNY', {},
+  )
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view,
+    subagents: clientExports.subagentViews([], [], [SPLIT_BUILTIN], 'CNY', {}),
+    exchangeRates: {}, t, pricingError: null, onConfigure: () => {},
+  }))
+  assert.match(html, /<div class="tf_totalLabel">合计<\/div>/)
+  assert.doesNotMatch(html, /含子代理/)
+  assert.doesNotMatch(html, /tf_group.*data-subagents/)
+})
+
+test('子代理读不到用量时如实说明未计入合计', () => {
+  const view = clientExports.computeView({ rows: [] }, [SPLIT_BUILTIN], 'CNY', {})
+  const subagents = clientExports.subagentViews(
+    [{ id: 's1', rows: null, source: null, reason: 'no-cache' }],
+    [{ id: 's1', createdAt: 1, mode: 'one-shot', label: '外部代理' }],
+    [SPLIT_BUILTIN], 'CNY', {},
+  )
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view, subagents: { ...subagents, error: null }, exchangeRates: {}, t, pricingError: null, onConfigure: () => {},
+  }))
+  assert.match(html, /1 个子代理的用量暂时读不到，未计入合计/)
+  assert.match(html, /读不到用量/)
+  // 只有子代理、自己没有用量时也要能渲染出面板，而不是走空态。
+  assert.doesNotMatch(html, /本会话还没有产生计费用量/)
 })
 
 test('明细合计把各币种并列，缺汇率时点名', () => {
