@@ -349,6 +349,74 @@ await test('空条目表可以保存，且内置层照常生效', async () => {
   assert.ok(store.schedules.deepseek !== undefined, '内置规则应仍在')
 })
 
+await test('汇率写在用户文件里：进快照、配置层覆盖、改完通知订阅者', async () => {
+  // 汇率从 cordis.yml 迁到 token-fee.json：改完即生效（mtime 缓存），配置层仍可覆盖。
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  await writeFile(file, JSON.stringify({ version: 1, exchangeRates: { USD: 7.2, EUR: 7.8 }, entries: [] }), 'utf8')
+  const store = new PricingStore(resolveConfig({ pricingFile: file, exchangeRates: { EUR: 8.1 } }))
+  await store.refresh()
+  assert.deepEqual(store.snapshot().exchangeRates, { USD: 7.2, EUR: 8.1 }, '配置层应覆盖同名币种，其余沿用文件')
+  assert.deepEqual(store.snapshot().file.exchangeRates, { USD: 7.2, EUR: 7.8 }, '文件层要单独可见：保存时写回它')
+  assert.deepEqual(store.snapshot().configExchangeRates, { EUR: 8.1 })
+
+  const versionBefore = store.projectionVersion()
+  let notified = 0
+  const off = store.onChange(() => { notified += 1 })
+  // 只改汇率：必须通知（否则面板上的折算合计要等重启才更新），但**不能**动状态版本
+  // （那会把所有会话的检查点作废、白折一遍历史）。
+  await writeFile(file, JSON.stringify({ version: 1, exchangeRates: { USD: 7.35 }, entries: [] }), 'utf8')
+  await store.refresh()
+  assert.equal(notified, 1, '只改汇率也要通知订阅者')
+  assert.equal(store.projectionVersion(), versionBefore, '汇率不进折叠语义，状态版本不该变')
+  // 文件里只写了 USD，但配置层的 EUR 仍在：两层是叠加的，不是互斥的。
+  assert.deepEqual(store.snapshot().exchangeRates, { USD: 7.35, EUR: 8.1 }, '文件层改完即刻生效，配置层照旧')
+  assert.deepEqual(store.snapshot().file.exchangeRates, { USD: 7.35 }, '文件里原来的 EUR 应随之消失')
+  off()
+})
+
+await test('文件里的汇率非法时整份文件被拒，内置层照常生效', async () => {
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  await writeFile(file, JSON.stringify({
+    version: 1,
+    exchangeRates: { USD: 0 },
+    entries: [{
+      id: 'a', provider: 'p', model: 'm', currency: 'CNY',
+      prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 } },
+    }],
+  }), 'utf8')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await store.refresh()
+  assert.match(store.fileError ?? '', /exchangeRates\.USD 必须是正数/, '错误信息要点名哪一项')
+  assert.equal(store.snapshot().file.entries.length, 0, '整份文件被拒，条目也不生效')
+  assert.ok(store.entries.length >= 2, '内置层仍在')
+  assert.deepEqual(store.snapshot().exchangeRates, {})
+})
+
+await test('保存时带上汇率，落盘后仍可读回', async () => {
+  // 设置页保存是整份覆盖写：不带 exchangeRates 就等于把汇率清空。
+  const { mkdtemp, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await store.save({ version: 1, exchangeRates: { USD: 7.2 }, entries: [] })
+  const written = JSON.parse(await readFile(file, 'utf8'))
+  assert.deepEqual(written.exchangeRates, { USD: 7.2 })
+  assert.deepEqual(store.snapshot().exchangeRates, { USD: 7.2 }, '保存后立即生效')
+  // 空表不落盘：文件里只留真正配过的币种。
+  await store.save({ version: 1, entries: [] })
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).exchangeRates, undefined)
+})
+
 await test('同一进程内并发保存各写各的临时文件', async () => {
   // 临时名曾经只带 pid：同一进程里两次并发保存会撞同一个文件名，一个写到一半被另一
   // 个截断。现在带随机后缀，两次并发保存都应产出完整文件。

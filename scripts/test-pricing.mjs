@@ -13,10 +13,12 @@ import {
   computeCost,
   costOfEntry,
   matchEntry,
+  mergeExchangeRates,
   mergePricingLayers,
   normalizeEntry,
   normalizeExchangeRates,
   normalizeHolidaySets,
+  sameExchangeRates,
   tariffAt,
   tariffOf,
   tariffStateAt,
@@ -299,6 +301,31 @@ const MIXED_ROWS = [
   { provider: 'p', model: 'm-cny', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
   { provider: 'p', model: 'm-usd', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 },
 ]
+
+test('汇率表合并：文件层在前，配置层覆盖同名字段', () => {
+  // 汇率现在主要写在 token-fee.json 里，cordis.yml 那份保留为管理员覆盖，
+  // 层次顺序与价目表一致（内置 → 用户文件 → 插件配置）。
+  const file = normalizeExchangeRates({ USD: 7.2, EUR: 7.8 }, 'CNY')
+  const config = normalizeExchangeRates({ EUR: 8.1, JPY: 0.05 }, 'CNY')
+  const merged = mergeExchangeRates(file, config)
+  assert.deepEqual(merged, { USD: 7.2, EUR: 8.1, JPY: 0.05 })
+  assert.ok(Object.isFrozen(merged))
+  // 缺一层时就是另一层。
+  assert.deepEqual(mergeExchangeRates(file, undefined), { USD: 7.2, EUR: 7.8 })
+  assert.deepEqual(mergeExchangeRates(undefined, config), { EUR: 8.1, JPY: 0.05 })
+  assert.deepEqual(mergeExchangeRates(undefined, undefined), {})
+})
+
+test('汇率表等价判定：只改汇率时不当作表变化', () => {
+  // 汇率只影响展示、不影响折叠语义，因此不能进 tableRevision——否则改一次汇率
+  // 就会把所有会话的检查点作废、白折一遍历史。
+  assert.equal(sameExchangeRates({ USD: 7.2 }, { USD: 7.2 }), true)
+  assert.equal(sameExchangeRates({}, {}), true)
+  assert.equal(sameExchangeRates(undefined, {}), true)
+  assert.equal(sameExchangeRates({ USD: 7.2 }, { USD: 7.3 }), false)
+  assert.equal(sameExchangeRates({ USD: 7.2 }, { USD: 7.2, EUR: 7.8 }), false)
+  assert.equal(sameExchangeRates({ USD: 7.2, EUR: 7.8 }, { USD: 7.2 }), false)
+})
 
 test('汇率表校验：合法表被冻结，非法值报错', () => {
   const rates = normalizeExchangeRates({ USD: 7.2 }, 'CNY')

@@ -244,6 +244,10 @@ try {
     if (body.exchangeRates?.[PROBE_RATE_CURRENCY] !== PROBE_RATE) {
       throw new Error(`exchangeRates 未随快照返回：${JSON.stringify(body.exchangeRates)}`)
     }
+    // 汇率现在也有一层在用户文件里；快照必须把文件层单独暴露出来（保存时要写回它）。
+    if (typeof body.file?.exchangeRates !== 'object' || body.file.exchangeRates === null) {
+      throw new Error(`file.exchangeRates 缺失：${JSON.stringify(body.file)}`)
+    }
     // 节假日数据由 `new URL('../data/cn-holidays.json', import.meta.url)` 定位，
     // 这条断言确认它在真实装载路径下解析得到——装错位置或漏进 files 都会在这里露出来。
     if (!Array.isArray(body.holidaySets?.cn?.holidays) || body.holidaySets.cn.holidays.length === 0) {

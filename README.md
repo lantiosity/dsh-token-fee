@@ -95,7 +95,7 @@ node scripts/install.mjs --check    # 校验既有安装
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
 | `displayCurrency` | `CNY` | 胶囊与合计使用的展示币种，必须是 ICU 认识的 ISO 4217 代码。 |
-| `exchangeRates` | 无 | 折算汇率表 `{ 币种: 数值 }`，含义为 1 单位该币种等于多少展示币种，例如 `{ USD: 7.2 }`。 |
+| `exchangeRates` | 无 | 折算汇率表 `{ 币种: 数值 }`，含义为 1 单位该币种等于多少展示币种，例如 `{ USD: 7.2 }`。**通常写在 `token-fee.json` 里**（改完即生效），这里的一份作为管理员覆盖。 |
 | `pricingFile` | `<DSH_HOME>/token-fee.json` | 用户价目表路径；相对路径按 `DSH_HOME` 解析。 |
 | `schedules` | 无 | 额外或覆盖内置的命名峰谷规则。 |
 | `pricing` | 无 | 额外或覆盖其它层的价目条目。 |
@@ -106,12 +106,22 @@ node scripts/install.mjs --check    # 校验既有安装
 - id: token-fee
   config:
     displayCurrency: CNY
-    exchangeRates:
-      USD: 7.2
     pricingFile: my-prices.json
 ```
 
-**多币种**：价目条目各带 `currency`，同一会话里可能既有人民币也有美元用量。胶囊与合计**始终**按币种并列累加（`¥1.23 + US$0.56`），不会丢掉任何一种；配了 `exchangeRates` 之后再额外给出一个折算合计（`≈ ¥5.26`）。**只要有一种外币缺汇率就不给折算合计**——半个合计比没有合计更危险。细节见 [`docs/configuration.md`](docs/configuration.md)。
+**汇率写在 `token-fee.json` 里**（`docs/configuration.md` 的「文件格式」给的是完整示例，见 [`docs/configuration.md`](docs/configuration.md)）：
+
+```json
+{
+  "version": 1,
+  "exchangeRates": { "USD": 7.2 },
+  "entries": []
+}
+```
+
+文件按 mtime 热读，**改完不用重启 dsh**：打开「价格设置」页会重新拉取，胶囊在刷新页面后更新。写在 `cordis.yml` 里的 `exchangeRates` 仍然有效，保留给管理员覆盖——同一个币种以配置为准，没写的沿用文件。设置页保存价目表时会把文件里那份汇率原样带回去，不会顺手清空。
+
+**多币种**：价目条目各带 `currency`，同一会话里可能既有人民币也有美元用量。胶囊与合计**始终**按币种并列累加（`¥1.23 + US$0.56`），不会丢掉任何一种；配了汇率之后再额外给出一个折算合计（`≈ ¥5.26`）。**只要有一种外币缺汇率就不给折算合计**——半个合计比没有合计更危险。
 
 ### 文件格式
 

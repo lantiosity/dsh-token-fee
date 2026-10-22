@@ -1512,6 +1512,16 @@ test('保存时把非法价格归零并报告字段', () => {
   assert.match(corrected[0], /缓存未命中/)
 })
 
+test('保存时把文件层的汇率原样带回，没配就不写这个键', () => {
+  // 设置页的保存是**整份覆盖写**：不带 exchangeRates 就等于「保存一次价目表就把
+  // 汇率清空」。带的是文件层那份而不是生效值——生效值可能被 cordis.yml 覆盖，
+  // 写回去会把管理员配置固化进用户文件。
+  const withRates = clientExports.buildSavePayload([draftEntry()], {}, t, { USD: 7.2 })
+  assert.deepEqual(withRates.exchangeRates, { USD: 7.2 })
+  assert.equal('exchangeRates' in clientExports.buildSavePayload([draftEntry()], {}, t, {}), false, '没配汇率时不该写出空表')
+  assert.equal('exchangeRates' in clientExports.buildSavePayload([draftEntry()], {}, t), false)
+})
+
 test('没有任何规则时保存传 null 而不是空对象', () => {
   // host 对 `schedules` 的判据是 null / 非 null，空对象会被写进文件。
   assert.equal(clientExports.buildSavePayload([draftEntry()], {}, t).schedules, null)

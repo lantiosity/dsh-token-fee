@@ -95,7 +95,7 @@ The entry's `config` in `cordis.yml` accepts five keys:
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `displayCurrency` | `CNY` | Display currency for the pill and the total; must be an ISO 4217 code ICU recognizes. |
-| `exchangeRates` | none | Conversion rates `{ currency: number }`, meaning one unit of that currency equals how many units of the display currency, for example `{ USD: 7.2 }`. |
+| `exchangeRates` | none | Conversion rates `{ currency: number }`, meaning one unit of that currency equals how many units of the display currency, for example `{ USD: 7.2 }`. **Normally written in `token-fee.json`** (applies as soon as you save); the copy here is the administrator override. |
 | `pricingFile` | `<DSH_HOME>/token-fee.json` | Path to the user pricing table; a relative path resolves against `DSH_HOME`. |
 | `schedules` | none | Extra or overriding named peak/off-peak schedules. |
 | `pricing` | none | Extra or overriding pricing entries. |
@@ -106,10 +106,20 @@ Config is validated **at load time**: unknown keys, a misspelled currency and st
 - id: token-fee
   config:
     displayCurrency: CNY
-    exchangeRates:
-      USD: 7.2
     pricingFile: my-prices.json
 ```
+
+**Rates live in `token-fee.json`** (the "File format" section of [`docs/configuration.md`](docs/configuration.md) has the full example):
+
+```json
+{
+  "version": 1,
+  "exchangeRates": { "USD": 7.2 },
+  "entries": []
+}
+```
+
+The file is read by mtime, so **no dsh restart is needed**: opening the pricing page refetches, and the pill picks the new values up on a page refresh. `exchangeRates` in `cordis.yml` still works as the administrator override — the config value wins per currency, and currencies it omits fall back to the file. Saving the price table from the settings page carries the file's rates back, so it never wipes them.
 
 **Multiple currencies**: every pricing entry carries its own `currency`, so one session can mix CNY and USD usage. The pill and the total **always** accumulate per currency side by side (`¥1.23 + US$0.56`) and never drop one; once `exchangeRates` is configured they additionally show one converted total (`≈ ¥5.26`). **If any foreign currency has no rate, no converted total is shown at all** — half a total is more dangerous than none. Details in [`docs/configuration.md`](docs/configuration.md).
 
