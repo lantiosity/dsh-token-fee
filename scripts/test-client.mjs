@@ -1779,6 +1779,15 @@ test('空面板也要说出子代理读取失败（错误不再被吞）', () =>
   assert.match(html, /2 个子代理的用量暂时读不到/)
 })
 
+test('金额按币种标准小数位显示（JPY 0 位、BHD 3 位）', () => {
+  // 固定两位会把日元显示成 ¥0.00、把巴林第纳尔截掉第三位。
+  const money = (value, currency) => clientExports.formatMoney(value, currency)
+  assert.match(money(1234, 'JPY'), /1,234/)
+  assert.doesNotMatch(money(1234, 'JPY'), /\./)
+  assert.match(money(1234.567, 'BHD'), /1,234\.567/)
+  assert.match(money(1.5, 'CNY'), /1\.50/)
+})
+
 test('没有任何规则时保存传 null 而不是空对象', () => {
   // host 对 `schedules` 的判据是 null / 非 null，空对象会被写进文件。
   assert.equal(clientExports.buildSavePayload([draftEntry()], {}, t).schedules, null)
