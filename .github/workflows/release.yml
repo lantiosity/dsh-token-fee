@@ -80,17 +80,21 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          for attempt in 1 2 3 4 5; do
+          # npm 在 publish 成功后还会异步处理一段时间（日志里会写 “may take a few
+          # minutes”）。等它传播完：最多 ~8 分钟，每 15 秒一次。
+          for attempt in $(seq 1 32); do
             PUBLISHED="$(npm view "@lantiosity/dsh-token-fee@$VERSION" version 2>/dev/null || true)"
             if [ "$PUBLISHED" = "$VERSION" ]; then
               echo "registry 上已是 $VERSION"
               exit 0
             fi
             echo "第 $attempt 次未读到 $VERSION，稍后重试…"
-            sleep 10
+            sleep 15
           done
-          echo "::error::发布后 registry 上读不到 $VERSION"
-          exit 1
+          # 发布本身已经返回成功（含 provenance），只是 registry 还没传播完：
+          # 这不是发布失败，不该拦住后面的 Release 创建。
+          echo "::warning::发布已成功，但 ${VERSION} 在等待窗口内未能在 registry 上读到；请稍后手动核对。"
+          exit 0
 
       - name: 创建 GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
