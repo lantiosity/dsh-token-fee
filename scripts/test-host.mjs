@@ -293,6 +293,38 @@ await test('子代理端点按会话观测返回用量，并释放观测', async
   assert.deepEqual(disposed.sort(), ['empty', 'live'])
 })
 
+await test('子代理端点异常就地转成 500 JSON，而不是逃逸给 webserver', async () => {
+  // webserver 的 last-resort 只会回 400 纯文本，客户端拿不到可读原因。
+  // 这里让折叠本身抛错（`llm/retry-started` 缺 data），断言端点自己兜住。
+  const available = {
+    sessionQuery: {
+      async observeSession(id) {
+        return {
+          source: 'prepared',
+          header: { id, createdAt: 1 },
+          inheritedEventCount: 0,
+          // 先有一条用量事件让 state.last 非空，再来一条缺 data 的 retry-started：
+          // definition.apply 会访问 event.data.turn 而抛 TypeError。
+          events: [
+            { seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'p', model: 'm' } } } },
+            { seq: 1, type: 'assistant/message', time: 2, data: { turn: 1, step: 1, usage: { inputTokens: 5 } } },
+            { seq: 2, type: 'llm/retry-started', time: 3 },
+          ],
+          [Symbol.dispose]() {},
+        }
+      },
+    },
+  }
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'], available)
+  apply(context, undefined)
+  const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
+  const response = await getRoute(route, '/api/token-fee/subagents?ids=broken')
+  assert.equal(response.status, 500, '异常应转成 500')
+  assert.equal(response.payload.ok, false)
+  assert.equal(response.payload.error, 'subagents-failed')
+  assert.match(response.payload.message, /读取子代理用量失败/)
+})
+
 await test('子代理端点递归收集孙代用量，并给出嵌套数量', async () => {
   // DSH 的 subagentCatalog 只登记**直接**子会话，因此孙代必须由插件自己往下走；
   // 否则多级委派会静默少算钱，而 README 声称「覆盖整棵子树」。

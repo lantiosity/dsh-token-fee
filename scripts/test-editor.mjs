@@ -34,6 +34,9 @@ async function test(name, body) {
   }
 }
 
+/** 控制 `window.confirm` 的返回值（默认确认）。 */
+let confirmResult = true
+
 /** 最小 DOM 替身：客户端半在模块顶层会碰 `document`/`window`。 */
 function installBrowserGlobals() {
   globalThis.document = {
@@ -44,7 +47,13 @@ function installBrowserGlobals() {
     removeEventListener: () => {},
     visibilityState: 'visible',
   }
-  globalThis.window = { innerWidth: 1280, innerHeight: 900, addEventListener: () => {}, removeEventListener: () => {} }
+  globalThis.window = {
+    innerWidth: 1280,
+    innerHeight: 900,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    confirm: () => confirmResult,
+  }
 }
 
 /**
@@ -109,7 +118,7 @@ async function loadHarness(snapshotOverrides = {}) {
       exchangeRates: { USD: 7.2 },
       entries: fileEntries,
       builtin: [],
-      schedules: {},
+      schedules: snapshotOverrides.schedules ?? {},
       builtinSchedules: {},
       holidaySets: {},
       configExchangeRates: {},
@@ -243,6 +252,52 @@ await test('Escape 在浮层展开时交给浮层，不关闭面板', async () =
   assert.equal(exports.shouldDismissOnEscape(undefined), true)
   assert.equal(exports.shouldDismissOnEscape(1), false, '浮层展开时不该关面板')
   assert.equal(exports.shouldDismissOnEscape(2), false)
+})
+
+await test('「恢复内置价目」先确认，取消则不发请求', async () => {
+  // 破坏性操作：直接删掉用户手写的 token-fee.json，没有撤销。误点即丢数据。
+  const { exports, requests, api, t } = await loadHarness()
+  const element = exports.PricingEditor({ pricing: api, t, onOverlayToggle: () => {} })
+  const resetButton = findClickable(element, 'editor.resetDefaults')
+  assert.ok(resetButton !== null, '应有「恢复内置价目」按钮')
+  confirmResult = false
+  try {
+    resetButton.props.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(requests.filter(entry => entry.init?.method === 'POST').length, 0, '取消确认后不应发出删除请求')
+  } finally {
+    confirmResult = true
+  }
+  resetButton.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(requests.filter(entry => entry.init?.method === 'POST').length, 1, '确认后应发出删除请求')
+})
+
+await test('引用配置层（cordis.yml）规则的条目能保存', async () => {
+  // 管理员在 cordis.yml 里定义 schedules，用户文件引用它：host 校验通过，但旧实现
+  // 编辑器的规则名只取「内置 + 文件草稿」，本地校验会判定「引用的规则已不存在」并
+  // 阻止保存。现在合并层的规则名也纳入候选。
+  const rule = { timezone: 'Asia/Shanghai', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00']] }
+  const { exports, requests, api, t } = await loadHarness({
+    schedules: { 'admin-rule': rule },
+    fileEntries: [{
+      id: 'mine',
+      provider: 'p',
+      model: 'm',
+      currency: 'CNY',
+      schedule: 'admin-rule',
+      prices: {
+        peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 },
+        offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 1 },
+      },
+    }],
+  })
+  const element = exports.PricingEditor({ pricing: api, t, onOverlayToggle: () => {} })
+  findClickable(element, 'editor.save').props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const posts = requests.filter(entry => entry.init?.method === 'POST')
+  assert.equal(posts.length, 1, '引用配置层规则的条目应能直接保存')
+  assert.equal(JSON.parse(posts[0].init.body).entries[0].schedule, 'admin-rule')
 })
 
 if (failures.length > 0) {

@@ -1762,6 +1762,23 @@ test('保存不改写平面条目的 schedule 引用', () => {
   assert.equal('schedule' in bare.entries[0], false)
 })
 
+test('空面板也要说出子代理读取失败（错误不再被吞）', () => {
+  // 会话自己没有用量、子代理接口调用失败时，旧实现只显示「还没有产生计费用量」，
+  // 真正的错误被提前返回吞掉了。
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view: clientExports.computeView({ rows: [] }, [SPLIT_BUILTIN], 'CNY', {}),
+    subagents: { cards: [], rows: [], missing: 2, truncated: 0, total: clientExports.computeView({ rows: [] }, [SPLIT_BUILTIN], 'CNY', {}), error: 'HTTP 500' },
+    exchangeRates: {},
+    t,
+    pricingError: null,
+    onConfigure: () => {},
+  }))
+  assert.match(html, /detail\.empty/)
+  assert.match(html, /子代理用量读取失败：HTTP 500/)
+  assert.match(html, /HTTP 500/)
+  assert.match(html, /2 个子代理的用量暂时读不到/)
+})
+
 test('没有任何规则时保存传 null 而不是空对象', () => {
   // host 对 `schedules` 的判据是 null / 非 null，空对象会被写进文件。
   assert.equal(clientExports.buildSavePayload([draftEntry()], {}, t).schedules, null)

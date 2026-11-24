@@ -36,7 +36,7 @@ projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
 
 这是 CSRF 与 DNS-rebinding 防线的一部分：放宽判据需要复用 connection 插件的信任判定，而该判定位于客户端包内，link 安装的插件解析不到它，重写一份又会重复安全关键逻辑。经远程地址使用时，请直接编辑 `<DSH_HOME>/token-fee.json`。
 
-写请求另外要求自定义动作头，读取端点只做来源判定。端点抛出的异常一律就地转成错误响应——一个逃逸的 rejection 会让 `dsh web` 直接退出，`test-process.mjs` 专门盯这条。
+写请求另外要求自定义动作头，读取端点只做来源判定。端点抛出的异常一律就地转成结构化错误响应——当前 DSH 的 webserver 外层还有 last-resort `.catch()`（回 400 纯文本），逃逸的 rejection 不会终止进程，但客户端拿不到可读原因；`test-process.mjs` 专门盯这条。
 
 ## 已知取舍
 
