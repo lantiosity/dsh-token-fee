@@ -1747,6 +1747,21 @@ test('文件无效时禁用保存与恢复内置，避免覆盖用户手写内�
   assert.doesNotMatch(okSave.attrs, /disabled/, '文件正常时保存应可用')
 })
 
+test('保存不改写平面条目的 schedule 引用', () => {
+  // 平面条目（只有统一单价、没有 offPeak）用不到峰谷判定，但 host 允许它带着
+  // `schedule` 引用；旧实现保存时一律把它写成 null，等于静默改写用户手工维护的文件。
+  const flat = draftEntry({
+    id: 'flat-with-schedule',
+    schedule: 'my-rule',
+    prices: { peak: { input: '1', cacheRead: '0', cacheWrite: '0', output: '2' } },
+  })
+  const kept = clientExports.buildSavePayload([flat], { 'my-rule': { timezone: 'UTC', peakDays: [1], peakWindows: [['09:00', '12:00']] } }, t)
+  assert.equal(kept.entries[0].schedule, 'my-rule', '平面条目的 schedule 引用必须原样保留')
+  // 真正没有 schedule 的条目仍然不写这个键。
+  const bare = clientExports.buildSavePayload([draftEntry()], {}, t)
+  assert.equal('schedule' in bare.entries[0], false)
+})
+
 test('没有任何规则时保存传 null 而不是空对象', () => {
   // host 对 `schedules` 的判据是 null / 非 null，空对象会被写进文件。
   assert.equal(clientExports.buildSavePayload([draftEntry()], {}, t).schedules, null)

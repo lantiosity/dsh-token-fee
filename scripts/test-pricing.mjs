@@ -169,6 +169,22 @@ test('同层内 (provider, model, currency) 重复被拒绝', () => {
   assert.equal(merged[0].prices.peak.input, 9)
 })
 
+test('未知字段被拒绝（拼错键不再静默变成另一种语义）', () => {
+  // `provder` 拼错会让 provider 回落成通配 `*`，把某供应商价格套到所有供应商；
+  // `cache_read` 拼错会静默按 0 计。两者都「保存成功、界面正常」，只能在报错里暴露。
+  assert.throws(() => normalizeEntry(entry({ provder: 'p' }), 'x'), /含未知字段：provder/)
+  assert.throws(
+    () => normalizeEntry(entry({ prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2, cache_read: 3 } } }), 'x'),
+    /含未知字段：cache_read/,
+  )
+  assert.throws(
+    () => validateSchedules({ s: { timezone: 'UTC', peakDays: [1], peakWindows: [['09:00', '10:00']], holiday: [] } }),
+    /含未知字段：holiday/,
+  )
+  // 已知字段照常通过（含合并进来的顶层配置层）。
+  assert.doesNotThrow(() => normalizeEntry(entry({ note: '备注', source: 'x' }), 'x'))
+})
+
 test('非法时区被拒绝', () => {
   assert.throws(() => validateSchedules({ bad: { timezone: 'Mars/Olympus', peakDays: [1], peakWindows: [['09:00', '10:00']] } }), /时区/)
 })
