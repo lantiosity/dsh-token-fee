@@ -133,10 +133,29 @@ async function loadHarness(snapshotOverrides = {}) {
   return { exports, requests, api, t: makeTranslate() }
 }
 
-/** 翻译替身：未知键回退为键名，与其它套件一致。 */
+/**
+ * 翻译替身：未知键回退为键名，但会把 `{name}` 占位符替换成实参——否则断言里
+ * 看不到「带变量」的文案（例如供应商分组标题里的 provider 名）。
+ */
 function makeTranslate() {
-  const translate = (key) => String(key)
+  const translate = (key, params) => {
+    let out = String(key)
+    for (const [name, value] of Object.entries(params ?? {})) out = out.replaceAll(`{${name}}`, String(value))
+    return out
+  }
   return new Proxy(translate, { get: () => translate })
+}
+
+/** 把元素树里所有可见文本拼起来，供断言用（会展开函数组件）。 */
+function flattenText(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(flattenText).join(' ')
+  if (typeof node.type === 'function') {
+    const props = node.props ?? {}
+    return `${flattenText(props.children ?? null)} ${flattenText(node.type(props))}`
+  }
+  return flattenText(node.props?.children ?? null)
 }
 
 /** 深度遍历元素树，按可见文本找带 `onClick` 的节点。 */
@@ -190,6 +209,40 @@ await test('没有配汇率时请求体不写这个键（交给 host 保留原�
   const posts = requests.filter((entry) => entry.init?.method === 'POST')
   assert.equal(posts.length, 1)
   assert.equal('exchangeRates' in JSON.parse(posts[0].init.body), false)
+})
+
+await test('切标签 / 关面板后未保存的草稿仍在，并有提示', async () => {
+  // 编辑器只在「价格设置」标签页挂载：切到明细或关面板就会卸载，组件内 state 随之
+  // 消失，用户刚改的内容会无声丢失。草稿按 pricing 句柄暂存，重新挂载即恢复。
+  const { exports, api, t } = await loadHarness()
+  const draftEntry = {
+    id: 'mine',
+    // 卡片默认按供应商折叠，模型名不会直接出现在文本里；用供应商名做断言。
+    provider: 'draft-provider',
+    model: 'restored-model',
+    currency: 'CNY',
+    schedule: null,
+    prices: { peak: { input: 2, cacheRead: 0, cacheWrite: 0, output: 4 } },
+  }
+  exports.rememberDraft(api, { entries: [draftEntry], schedules: {} })
+  const restored = exports.PricingEditor({ pricing: api, t, onOverlayToggle: () => {} })
+  const text = flattenText(restored)
+  assert.ok(text.includes('draft-provider'), `恢复的草稿应出现在编辑器里，实际渲染：${text.slice(0, 240)}`)
+  assert.ok(text.includes('editor.unsavedDraft'), '应提示有未保存的修改')
+  // 清空暂存后重新挂载：回到文件层内容，不再提示。
+  exports.rememberDraft(api, null)
+  const clean = flattenText(exports.PricingEditor({ pricing: api, t, onOverlayToggle: () => {} }))
+  assert.ok(!clean.includes('draft-provider'), '清空后不应再出现草稿内容')
+  assert.ok(!clean.includes('editor.unsavedDraft'), '无草稿时不该提示未保存')
+})
+
+await test('Escape 在浮层展开时交给浮层，不关闭面板', async () => {
+  // Menu 自己也监听 document 上的 Escape；两个监听都关会让一次按键收起两层。
+  const { exports } = await loadHarness()
+  assert.equal(exports.shouldDismissOnEscape(0), true)
+  assert.equal(exports.shouldDismissOnEscape(undefined), true)
+  assert.equal(exports.shouldDismissOnEscape(1), false, '浮层展开时不该关面板')
+  assert.equal(exports.shouldDismissOnEscape(2), false)
 })
 
 if (failures.length > 0) {

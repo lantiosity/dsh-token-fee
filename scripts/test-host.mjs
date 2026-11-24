@@ -137,7 +137,7 @@ await test('非法展示币种在装载时失败', () => {
   assert.throws(() => resolveConfig({ displayCurrency: 'RMB' }), /displayCurrency/)
 })
 
-await test('apply 注册投影与三个端点', () => {
+await test('apply 注册投影与四个端点', () => {
   const { context, captured } = fakeContext()
   apply(context, undefined)
   assert.equal(captured.projections.length, 1)
@@ -145,8 +145,10 @@ await test('apply 注册投影与三个端点', () => {
   assert.deepEqual(captured.routes.map(route => route.path).sort(), [
     '/api/token-fee/pricing',
     '/api/token-fee/pricing/reset',
+    // 路由建议拆成独立端点：模型发现可能很慢，不能拖住胶囊要读的价目表。
+    '/api/token-fee/routes',
     '/api/token-fee/subagents',
-  ])
+  ].sort())
 })
 
 /**
@@ -1067,11 +1069,34 @@ await test('reset 清空用户层，回到内置条目', async () => {
   await assert.rejects(readFile(file, 'utf8'), { code: 'ENOENT' })
 })
 
-await test('GET 端点返回已配置的 provider 与模型建议', async () => {
+await test('GET /pricing 不被模型发现阻塞（路由建议走独立端点）', async () => {
+  // 旧实现把 `llm.listModels` await 在 GET /pricing 里：适配器模型发现一慢，
+  // 胶囊要读的价目表就跟着等。现在 /pricing 只读缓存，慢的发现交给后台/独立端点。
   const { mkdtemp } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const llm = {
+    listProviders: () => [{ id: 'slow', name: 'Slow' }],
+    // 永远不 resolve：只要端点 await 它，这条用例就会挂死。
+    listModels: () => new Promise(() => {}),
+  }
+  const { context, captured } = fakeContext(undefined, { llm })
+  apply(context, { pricingFile: join(dir, 'token-fee.json') })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const response = captureResponse()
+  await route.handler(getRequest(), response)
+  assert.equal(response.status, 200)
+  assert.deepEqual(response.payload.routes, [], '冷缓存时先给空数组，模型发现留在后台')
+  assert.ok(Array.isArray(response.payload.entries), '价目表本身照常返回')
+})
+
+await test('路由建议独立端点返回 provider 与模型，且带 30 秒缓存', async () => {
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  let modelCalls = 0
   const llm = {
     listProviders: () => [
       { id: 'deepseek-official', name: 'DeepSeek' },
@@ -1079,6 +1104,7 @@ await test('GET 端点返回已配置的 provider 与模型建议', async () => 
       { id: 'broken', name: 'Broken' },
     ],
     listModels: async (provider) => {
+      modelCalls += 1
       if (provider === 'broken') throw new Error('NO_ADAPTER')
       return provider === 'deepseek-official'
         ? [{ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }]
@@ -1087,16 +1113,22 @@ await test('GET 端点返回已配置的 provider 与模型建议', async () => 
   }
   const { context, captured } = fakeContext(undefined, { llm })
   apply(context, { pricingFile: join(dir, 'token-fee.json') })
-  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
-  const response = captureResponse()
-  route.handler(getRequest(), response)
-  await settle(response)
-  assert.equal(response.status, 200)
-  assert.deepEqual(response.payload.routes, [
+  const route = captured.routes.find(row => row.path === '/api/token-fee/routes')
+  const first = captureResponse()
+  await route.handler(getRequest(), first)
+  assert.equal(first.status, 200)
+  assert.deepEqual(first.payload.routes, [
     { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }] },
     { id: 'my-gateway', name: 'My Gateway', models: [{ id: 'glm-5', name: 'GLM-5' }] },
+    // 模型发现失败只影响建议列表，路由本身仍可用。
     { id: 'broken', name: 'Broken', models: [] },
   ])
+  const callsAfterFirst = modelCalls
+  // 30 秒内重复请求命中缓存：不再调 llm。
+  const second = captureResponse()
+  await route.handler(getRequest(), second)
+  assert.deepEqual(second.payload.routes, first.payload.routes)
+  assert.equal(modelCalls, callsAfterFirst, '缓存期内不应重复调用 llm.listModels')
 })
 
 await test('缺少 llm 服务时路由建议为空而不是请求失败', async () => {
@@ -1106,10 +1138,9 @@ await test('缺少 llm 服务时路由建议为空而不是请求失败', async 
   const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
   const { context, captured } = fakeContext()
   apply(context, { pricingFile: join(dir, 'token-fee.json') })
-  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+  const route = captured.routes.find(row => row.path === '/api/token-fee/routes')
   const response = captureResponse()
-  route.handler(getRequest(), response)
-  await settle(response)
+  await route.handler(getRequest(), response)
   assert.equal(response.status, 200)
   assert.deepEqual(response.payload.routes, [])
 })
