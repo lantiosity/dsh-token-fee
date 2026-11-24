@@ -185,6 +185,18 @@ test('未知字段被拒绝（拼错键不再静默变成另一种语义）', ()
   assert.doesNotThrow(() => normalizeEntry(entry({ note: '备注', source: 'x' }), 'x'))
 })
 
+test('同分条目的优先级由数组顺序决定（不会按 id 或字母序重排）', () => {
+  // AGENTS.md 的不变量「数组顺序决定通配 tie 优先级」此前没有任何断言。
+  // 两条身份相同（provider/model 相同、币种不同）的条目分数相同，先出现在数组里的生效；
+  // 展示层的排序不能改变这个语义。
+  const first = entry({ id: 'first', currency: 'CNY' })
+  const second = entry({ id: 'second', currency: 'USD' })
+  const forward = matchEntry(validatePricing([first, second]), first.provider, first.model)
+  assert.equal(forward.id, 'first')
+  const backward = matchEntry(validatePricing([second, first]), first.provider, first.model)
+  assert.equal(backward.id, 'second')
+})
+
 test('非法时区被拒绝', () => {
   assert.throws(() => validateSchedules({ bad: { timezone: 'Mars/Olympus', peakDays: [1], peakWindows: [['09:00', '10:00']] } }), /时区/)
 })

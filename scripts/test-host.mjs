@@ -31,6 +31,15 @@ async function test(label, body) {
  * @param services - 视为已注入的服务名。
  * @param available - `ctx.get(name)` 能读到的可选服务。
  */
+// 不读真实的 `~/.dsh/token-fee.json`：`apply(ctx, undefined)` 会走默认路径，
+// 把 DSH_HOME 指到临时目录，套件因此是 hermetic 的（用户文件内容不影响结果）。
+{
+  const { mkdtemp: mkdtempHome } = await import('node:fs/promises')
+  const { tmpdir: tmpdirHome } = await import('node:os')
+  const { join: joinHome } = await import('node:path')
+  process.env.DSH_HOME = await mkdtempHome(joinHome(tmpdirHome(), 'token-fee-home-'))
+}
+
 function fakeContext(services = ['sessionProjections', 'webServer'], available = {}) {
   const captured = { projections: [], disposed: [], routes: [], effects: 0 }
   const context = {
@@ -213,6 +222,39 @@ await test('子代理端点只算子会话自己那段，不重算父会话的�
   assert.ok(Array.isArray(row.rows), `rows 应是数组：${JSON.stringify(row)}`)
   const tokens = row.rows.reduce((sum, item) => sum + item.input + item.cacheRead + item.cacheWrite + item.output, 0)
   assert.equal(tokens, 2_000_000, `只该算子会话自己的 2M，实际 ${tokens}（种子被重算就是 3M）`)
+})
+
+await test('回环防线逐项生效：peer 或 Host 任一非法都拒绝', async () => {
+  // 旧用例只测「两者都非法 → 403」：删掉 peer 校验或 Host 校验任意一半，套件仍全绿。
+  // 这里逐项断言，任一行被去掉都会变红。
+  const { context, captured } = fakeContext()
+  apply(context, {})
+  const route = captured.routes.find(item => item.path === '/api/token-fee/pricing')
+  const call = async (peer, host) => {
+    const request = {
+      method: 'GET',
+      url: '/api/token-fee/pricing',
+      headers: { host, accept: 'application/json' },
+      socket: { remoteAddress: peer },
+      async *[Symbol.asyncIterator]() {},
+    }
+    const response = {
+      status: 0,
+      payload: null,
+      writeHead(status) {
+        this.status = status
+      },
+      end(text) {
+        this.payload = text
+      },
+    }
+    await route.handler(request, response)
+    return response.status
+  }
+  assert.equal(await call('127.0.0.1', '127.0.0.1:3080'), 200, '两者都合法时放行')
+  assert.equal(await call('10.1.2.3', '127.0.0.1:3080'), 403, 'peer 非回环必须拒绝')
+  assert.equal(await call('127.0.0.1', 'evil.example.com'), 403, 'Host 非回环必须拒绝')
+  assert.equal(await call('::1', 'localhost:3080'), 200, 'IPv6 回环与 localhost 也应放行')
 })
 
 await test('投影 schema 严格校验恢复出来的状态，并提供无变化短路', async () => {
