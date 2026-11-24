@@ -23,8 +23,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-/** 严格模式：跳过即失败。CI 装了 dsh 之后必须一条都不跳。 */
-const REQUIRE_PROCESS = process.env.TOKEN_FEE_REQUIRE_PROCESS === '1'
+/** 严格模式：跳过即失败。CI 装了 dsh 之后必须一条都不跳。可用 `--strict` 或环境变量打开。 */
+const REQUIRE_PROCESS = process.env.TOKEN_FEE_REQUIRE_PROCESS === '1' || process.argv.includes('--strict')
 /** 跳过时的退出码；严格模式下用 1 让流水线变红。 */
 const SKIP_CODE = REQUIRE_PROCESS ? 1 : 77
 
@@ -78,9 +78,18 @@ async function test(label, body) {
   }
 }
 
-/** 轮询直到服务器应答或超时。 */
+/**
+ * 轮询直到服务器应答或超时。
+ *
+ * 子进程已经退出（或 spawn 失败）时立刻返回：旧实现无论失败原因都要等满
+ * `START_TIMEOUT_MS = 120s` 才去检查，CI 里判一次「没有 dsh」要白等两分钟。
+ * @param deadline - 最晚等到什么时刻。
+ * @returns 是否应答。
+ */
 async function waitForServer(deadline) {
   while (Date.now() < deadline) {
+    // 子进程已退出或 spawn 失败：再等下去没有意义。
+    if (childExited !== null || spawnFailure !== null) return false
     try {
       const response = await fetch(PRICING, { headers: { accept: 'application/json' } })
       if (response.status > 0) return true

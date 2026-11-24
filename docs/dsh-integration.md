@@ -8,7 +8,7 @@
 
 ## 版本兼容
 
-核对范围是 `dsh-v0.1.5-rc.1` 到 `dsh-v0.1.7-rc.1` 之间的 8 个 tag（`0.1.5-rc.1/rc.2/rc.3`、`0.1.6-alpha.1/alpha.2`、`0.1.7-alpha.1/alpha.2/rc.1`），并在 **`dsh-v0.1.7-rc.2`、`dsh-v0.2.0-rc.1`、`dsh-v0.2.0-rc.2`**，以及 0.2.1 线上的 **`alpha.1`–`alpha.5`、`rc.1`、`rc.2`** 上对同一组契约面做了复核对（0.2.1 线共 7 个 tag）。上游从 `0.1.6-alpha.2` 到 `0.2.1-rc.2` 之间改动很大（`0.1.7-rc.1`→`0.2.0-rc.2` 就有 794 个提交、1155 个文件），但**本插件依赖的表面全部没有变**：图标导出名、`conversation.composer.dock` 的 `{ kind: 'list', scope: 'session' }`、`Menu`/`Button` 的导出与 props、`--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter` 这些设计 token、`useProjection` 标准座位、以及 host 侧的 `sessionProjections.register`、`ctx.inject`、`ctx.get('llm')`、`ctx.webServer.register`、`ctx.locale.register`、`settings.section` 与 `ctx.slots.inject`——逐一在每个 tag 上确认存在，`Menu`/`Button` 的 props 接口还与 `0.1.7-rc.1` 逐字一致。`package.json` 里 `dsh.client.inject` 声明的 6 个宿主包在 0.2.1-rc.2 上也全部还在。
+核对范围是 `dsh-v0.1.5-rc.1` 到 `dsh-v0.1.7-rc.1` 之间的 8 个 tag（`0.1.5-rc.1/rc.2/rc.3`、`0.1.6-alpha.1/alpha.2`、`0.1.7-alpha.1/alpha.2/rc.1`），并在 **`dsh-v0.1.7-rc.2`、`dsh-v0.2.0-rc.1`、`dsh-v0.2.0-rc.2`**，0.2.1 线上的 **`alpha.1`–`alpha.5`、`rc.1`、`rc.2`**（共 7 个 tag），以及当前运行基线 **`0.2.2-rc.3`** 上对同一组契约面做了复核（0.2.2 线引入的 `sessionQuery.observeSession({ projectionMode })` 与 `subagent/catalog` 事件形状按 `deepseek-harness-sc` 源码逐项核对）。上游从 `0.1.6-alpha.2` 到 `0.2.2-rc.3` 之间改动很大（`0.1.7-rc.1`→`0.2.0-rc.2` 就有 794 个提交、1155 个文件），但**本插件依赖的表面全部没有变**：图标导出名、`conversation.composer.dock` 的 `{ kind: 'list', scope: 'session' }`、`Menu`/`Button` 的导出与 props、`--dsw-alias-*`/`--dsw-specific-menu`/`--dsw-menu-backdrop-filter` 这些设计 token、`useProjection` 标准座位、以及 host 侧的 `sessionProjections.register`、`ctx.inject`、`ctx.get('llm')`、`ctx.webServer.register`、`ctx.locale.register`、`settings.section` 与 `ctx.slots.inject`——逐一在每个 tag 上确认存在，`Menu`/`Button` 的 props 接口还与 `0.1.7-rc.1` 逐字一致。`package.json` 里 `dsh.client.inject` 声明的 6 个宿主包在 0.2.2-rc.3 上也全部还在。
 
 0.2.1 线带来两条**新的版本边界，但都是视觉层面的**（见下表）：官方统计胶囊拆成两条 dock 条目、胶囊圆角由全圆角改为 `--dsw-radius-sm`。**没有任何一条会打断插件**——胶囊仍照旧独立占一条 dock 条目，dock 的行布局也没变。
 
@@ -94,6 +94,8 @@ background: var(--dsw-alias-bg-layer-3);
 
 **配置 schema 是手写的 Standard Schema**：契约要求插件导出 `Config`，而 cordis 只调用 `Config['~standard'].validate`（`vendor/cordis/src/fiber.ts`）。这里没有 `import '@deepseek-ai/schemastery'`，因为本插件以 link 方式安装，Node 从插件真实路径逐级向上找 `node_modules`，够不到 `$DSH_HOME/profiles/node_modules`（实测 `ERR_MODULE_NOT_FOUND`），引入该包会让插件装载失败。手写的校验器同样在装载期报错、填默认值并拒绝未知键。
 
+**投影的 `stateSchema` / `viewSchema` 只实现了 `parse`**（同一个手写对象，不是 Zod 实例）：DSH 的类型要求 `ZodType`，但注册表运行时只调用 `.parse`（`ErasedDefinition`），所以现在能工作。这是一条**显式假设**——一旦上游改用 `safeParse`、读取 `_def`、或对 schema 做 JSON Schema 投影，插件会在装载期或恢复期失败。DSH 升级核对清单里要专门确认这一点；将来若能导入 `zod`，改回标准 schema。
+
 浏览器半是手写的 `window.__ModuleLoader__.load({ id, factory })` 包，无构建步骤。它只 `require` 平台模块表里的四个说明符（`react`、`react/jsx-runtime`、`react-dom`、`@deepseek-ai/dsh-client-ui-primitives`），因此不涉及 `dsh.client.external`。
 
 <h2 id="english">English</h2>
@@ -168,6 +170,8 @@ Note that DSH's own code carries dangling references of the same kind (`ui-jobs`
 ## Module resolution
 
 **The config schema is a hand-written Standard Schema**: the contract requires the plugin to export `Config`, and cordis only calls `Config['~standard'].validate` (`vendor/cordis/src/fiber.ts`). There is no `import '@deepseek-ai/schemastery'` here because the plugin is link-installed: Node walks up from the plugin's real path looking for `node_modules` and never reaches `$DSH_HOME/profiles/node_modules` (measured as `ERR_MODULE_NOT_FOUND`), so importing that package would make the plugin fail to load. The hand-written validator still errors at load time, fills defaults and rejects unknown keys.
+
+**The projection `stateSchema` / `viewSchema` implement only `parse`** (the same hand-written object, not a Zod instance): DSH's types ask for `ZodType`, but the registry only calls `.parse` at runtime (`ErasedDefinition`), so it works today. This is an **explicit assumption** — if upstream switches to `safeParse`, reads `_def`, or projects the schema to JSON Schema, the plugin will fail at load or restore time. The DSH upgrade checklist must verify this specifically; if `zod` ever becomes importable, switch back to a standard schema.
 
 The browser half is a hand-written `window.__ModuleLoader__.load({ id, factory })` bundle with no build step. It only `require`s four specifiers from the platform module table (`react`, `react/jsx-runtime`, `react-dom`, `@deepseek-ai/dsh-client-ui-primitives`), so it needs no `dsh.client.external`.
 

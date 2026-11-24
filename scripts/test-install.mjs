@@ -14,7 +14,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -116,6 +116,21 @@ await test('已安装版本与源不一致时校验报错', async () => {
       () => verify({ sourceRoot: ROOT, dshHome: home, packageName: NAME, expectEnabled: false }),
       /0\.0\.0-stale/,
     )
+  })
+})
+
+await test('用户手写单引号的 patch 记录也能识别（不重复追加）', async () => {
+  await withHome(async (home) => {
+    // 先手写一份用单引号、缩进不同的 patch 记录：旧实现的匹配式只认 JSON 风格，
+    // 会再追加一条同 id 的 insert，装载期就出现重复 id / 重复路由。
+    const patchPath = join(home, 'profiles', 'web', 'cordis.patch.yml')
+    await mkdir(dirname(patchPath), { recursive: true })
+    await writeFile(patchPath, `- insert:\n    - id: token-fee\n      name: '${NAME}'\n`, 'utf8')
+    const before = await readFile(patchPath, 'utf8')
+    await install({ sourceRoot: ROOT, dshHome: home, packageName: NAME, enable: true })
+    const after = await readFile(patchPath, 'utf8')
+    assert.equal(after, before, '已存在的记录不应被改写或重复追加')
+    assert.equal((after.match(/id: token-fee/g) ?? []).length, 1, '只应有一条 insert 记录')
   })
 })
 

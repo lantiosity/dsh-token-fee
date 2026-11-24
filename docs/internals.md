@@ -26,7 +26,7 @@
 projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
 ```
 
-`revision` 是归一化条目与调度的内容哈希。价目表一变（改价格、改规则、增删条目），`PricingStore` 就通知订阅者，插件撤下旧注册、按新版本重装；检查点的 `ver` 随即不匹配，DSH 从 `seq 0` 重折整段日志。**历史因此跟着新规则走，而不是冻结在当初那次判定上。**
+`revision` 是**折叠语义相关字段**的内容哈希：条目顺序与条数、`provider` / `model`、有没有 `offPeak`（决定标签是 peak/offPeak 还是 flat），以及解析后的调度（时区、高峰星期、高峰窗口、节假日与调休日期）。`prices`、`currency`、`note`、`source`、`id` **不进**哈希——它们只影响展示时的金额换算，不改变样本归到哪个时段。改规则（窗口、时区、节假日、增删条目、有无空闲价）时 `PricingStore` 通知订阅者，插件撤下旧注册、按新版本重装，检查点的 `ver` 随即不匹配，DSH 从 `seq 0` 重折整段日志——**历史因此跟着新规则走，而不是冻结在当初那次判定上**；改价格或备注则只刷新展示，不作废任何检查点。
 
 **时段标签不写死成高峰**：折叠入口是 `tariffOf(entry, timestamp)`，匹配不到条目、条目只有统一单价、或时间戳不可用时一律返回 `flat`（不分峰谷）。兜底值曾是 `peak`，于是「还没配置价格」和「只填了统一单价」这两段用量都会被计成高峰，而标签一旦写进检查点就冻结——这正是「高峰用量比规则算出来的多出十几个百分点」的来源。明细面板会单独标出 `flat` 用量的「未记录时段」，不会默默按高峰价冒充。
 
@@ -45,6 +45,7 @@ projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
 - **跨币种不自动折算**：插件不做任何外发请求，也不会硬编码一个会过期的汇率，所以折算率只能由用户通过 `exchangeRates` 提供。各币种**始终并列累加**（不丢信息）；**只要有一种外币缺汇率就不给折算合计**——半个合计比没有合计更危险，它看起来像「全部算完了」，实际漏掉了一种币。汇率方向定为「1 单位该币种等于多少展示币种」，并拒绝包含展示币种自身：那是目标不是来源，写进去说明方向理解反了。
 - **倒计时的小时不进位到天**：跨周末的长间隔按总小时数显示（例如 `63:00:00`），比「2 天 15 小时」更直接地回答「还剩多久」。
 - **金额四舍五入到分**：胶囊显示到分；明细面板给出更精确的数值。
+- **两种「会话口径」是刻意不同的**：胶囊 / 明细里的**本会话**数字按整条日志折（与官方 `tokenUsage` 一致），因此 fork 出来的会话会带着祖先那段的用量——它是这条会话上下文的一部分，也确实会被再次发给模型。**子代理端点**只折 `seq >= inheritedEventCount` 的**后缀**，因为父会话那一段已经由父会话自己的视图计过，重复计入就是四倍放大的那个 bug。两处都有注释与用例，别把它们「统一」掉。
 
 <h2 id="english">English</h2>
 
@@ -70,7 +71,7 @@ The period split is the **only** piece of derived data baked into that state, so
 projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
 ```
 
-`revision` is a content hash of the normalized entries and schedules. Whenever the table changes (a price edit, a rule edit, an entry added or removed), `PricingStore` notifies its subscribers and the plugin tears down the old registration and installs a new one; the checkpoint's `ver` then no longer matches and DSH refolds the whole log from `seq 0`. **History therefore follows the current rule instead of staying frozen at the original verdict.**
+`revision` is a hash of the fields that affect **fold semantics only**: entry order and count, `provider` / `model`, whether `offPeak` exists (which decides whether the label is peak/offPeak or flat), and the resolved schedule (timezone, peak weekdays, peak windows, holiday and make-up workday dates). `prices`, `currency`, `note`, `source` and `id` are **not** hashed — they only affect the displayed conversion, never which period a sample belongs to. When a rule changes (window, timezone, holidays, entries added/removed, off-peak added/removed), `PricingStore` notifies its subscribers and the plugin tears down the old registration and installs a new one; the checkpoint's `ver` then no longer matches and DSH refolds the whole log from `seq 0`. **History therefore follows the current rule instead of staying frozen at the original verdict.** Editing a price or a note only refreshes the display and invalidates no checkpoints.
 
 **The period label never defaults to peak**: the fold entry point is `tariffOf(entry, timestamp)`, which returns `flat` (no peak/off-peak split) when no entry matches, when the entry carries a single unit price only, or when the timestamp is unusable. The fallback used to be `peak`, so usage recorded before a price existed — or under a single unit price — was counted as peak, and once written into the checkpoint that label was frozen. That is exactly where "peak usage exceeds what the rule computes by a dozen points" came from. The breakdown panel reports `flat` usage separately as "without a period" rather than passing it off as peak.
 
@@ -89,3 +90,4 @@ Writes additionally require a custom action header; reads only decide on origin.
 - **No automatic cross-currency conversion**: the plugin makes no outbound requests and will not hard-code a rate that goes stale, so conversion rates can only come from the user via `exchangeRates`. Every currency is **always accumulated side by side** (no information dropped); and **if any foreign currency lacks a rate, no converted total is shown at all** — half a total is more dangerous than none, because it looks finished while quietly missing a currency. The rate direction is "one unit of that currency equals how many units of the display currency", and naming the display currency itself is rejected: it is the target, not a source, so listing it means the direction was misunderstood.
 - **The countdown does not carry hours into days**: a long gap across a weekend is shown as total hours (for example `63:00:00`), which answers "how long left" more directly than "2 days 15 hours".
 - **Amounts round to the cent**: the pill shows cents; the breakdown panel gives more precise figures.
+- **The two "session scopes" are deliberately different**: the pill / breakdown figures for **this session** fold the whole log (matching the official `tokenUsage`), so a forked session carries its ancestor's usage — it is part of this session's context and will be sent to the model again. The **subagent endpoint** folds only the `seq >= inheritedEventCount` **suffix**, because the parent's share is already counted by the parent's own view and counting it again is exactly the 4× inflation bug. Both places carry comments and tests; do not "unify" them.

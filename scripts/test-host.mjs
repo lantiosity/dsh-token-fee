@@ -260,7 +260,14 @@ await test('子代理端点按会话观测返回用量，并释放观测', async
 await test('子代理端点递归收集孙代用量，并给出嵌套数量', async () => {
   // DSH 的 subagentCatalog 只登记**直接**子会话，因此孙代必须由插件自己往下走；
   // 否则多级委派会静默少算钱，而 README 声称「覆盖整棵子树」。
-  const catalogOf = ids => ({ projections: { values: { subagentCatalog: ids.map(id => ({ id, createdAt: 1, mode: 'one-shot' })) } } })
+  // 子会话目录由插件自己从 `subagent/catalog` 事件折（端点用 `projectionMode: 'none'`，
+  // 不让框架为这条会话水合所有已注册投影）。
+  const catalogEvents = ids => ids.map((childId, index) => ({
+    seq: 10 + index,
+    type: 'subagent/catalog',
+    time: 3,
+    data: { version: 1, childId, childCreatedAt: 1, mode: 'one-shot', label: childId },
+  }))
   const header = { seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'p', model: 'm' } } } }
   const message = (tokens) => ({ seq: 1, type: 'assistant/message', time: 2, data: { turn: 1, step: 1, usage: { inputTokens: tokens } } })
   const available = {
@@ -268,10 +275,10 @@ await test('子代理端点递归收集孙代用量，并给出嵌套数量', as
       async observeSession(id) {
         const own = { source: 'prepared', header: { id, createdAt: 1 }, inheritedEventCount: 0, [Symbol.dispose]() {} }
         // child → grandchild → great-grandchild（深度 3，撞上 MAX_SUBAGENT_DEPTH 之前）
-        if (id === 'child') return { ...own, events: [header, message(1)], ...catalogOf(['grandchild']) }
-        if (id === 'grandchild') return { ...own, events: [header, message(2)], ...catalogOf(['great']) }
-        if (id === 'great') return { ...own, events: [header, message(4)], ...catalogOf([]) }
-        return { ...own, events: [header], ...catalogOf([]) }
+        if (id === 'child') return { ...own, events: [header, message(1), ...catalogEvents(['grandchild'])] }
+        if (id === 'grandchild') return { ...own, events: [header, message(2), ...catalogEvents(['great'])] }
+        if (id === 'great') return { ...own, events: [header, message(4), ...catalogEvents([])] }
+        return { ...own, events: [header, ...catalogEvents([])] }
       },
     },
   }
@@ -280,7 +287,7 @@ await test('子代理端点递归收集孙代用量，并给出嵌套数量', as
   const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
   const response = await getRoute(route, '/api/token-fee/subagents?ids=child')
   const [child] = response.payload.children
-  assert.equal(child.descendants, 2, '应报出两个后代（孙代 + 曾孙代）')
+  assert.equal(child.descendants, 2, `应报出两个后代（孙代 + 曾孙代），实际响应：${JSON.stringify(response.payload)}`)
   const total = child.rows.reduce((sum, row) => sum + row.input, 0)
   assert.equal(total, 1 + 2 + 4, `应把整棵子树的用量都算进来，实际 ${total}`)
 })
@@ -429,6 +436,51 @@ await test('汇率写在用户文件里：进快照、配置层覆盖、改完�
   assert.deepEqual(store.snapshot().exchangeRates, { USD: 7.35, EUR: 8.1 }, '文件层改完即刻生效，配置层照旧')
   assert.deepEqual(store.snapshot().file.exchangeRates, { USD: 7.35 }, '文件里原来的 EUR 应随之消失')
   off()
+})
+
+await test('只改价格/备注不作废检查点，改规则才作废', async () => {
+  // `projectionVersion()` 进检查点的 `stateVersion`：它一变，DSH 就把整段日志从 seq 0
+  // 重折。价格只影响展示换算、不影响时段归属，因此**不该**进指纹；规则（时区 / 高峰
+  // 星期 / 窗口 / 节假日）才会改变 `tariff` 标签，必须进。
+  const { mkdtemp, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const base = {
+    id: 'mine',
+    provider: 'my-gateway',
+    model: 'deepseek-flash',
+    currency: 'CNY',
+    schedule: { timezone: 'Asia/Shanghai', peakDays: [1, 2, 3, 4, 5], peakWindows: [['09:00', '12:00']] },
+    prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 }, offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 1 } },
+  }
+  const write = async (entry) => {
+    await writeFile(file, JSON.stringify({ version: 1, entries: [entry] }), 'utf8')
+    await store.refresh()
+  }
+  const store = new PricingStore(resolveConfig({ pricingFile: file }))
+  await write(base)
+  const baseline = store.projectionVersion()
+  assert.ok(Number.isSafeInteger(baseline))
+
+  // 改价格：展示金额变了，但时段归属没变 → 版本不变。
+  await write({ ...base, prices: { peak: { input: 9, cacheRead: 0, cacheWrite: 0, output: 18 }, offPeak: { input: 4.5, cacheRead: 0, cacheWrite: 0, output: 9 } } })
+  assert.equal(store.projectionVersion(), baseline, '改价格不应作废历史检查点')
+  // 改备注 / 币种 / id 同理。
+  await write({ ...base, note: '备注不影响折叠', currency: 'USD', id: 'mine-renamed' })
+  assert.equal(store.projectionVersion(), baseline, '改备注/币种/id 不应作废历史检查点')
+  // 把 `offPeak` 去掉 = 从峰谷两档变成统一单价：`tariff` 标签语义变了 → 版本必须变。
+  await write({ ...base, prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 } } })
+  const flat = store.projectionVersion()
+  assert.notEqual(flat, baseline, '有没有空闲价会改变 tariff 标签，必须作废')
+  // 改高峰窗口 → 时段归属变了 → 版本必须变。
+  await write({
+    ...base,
+    prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 } },
+    schedule: { ...base.schedule, peakWindows: [['10:00', '12:00']] },
+  })
+  assert.notEqual(store.projectionVersion(), flat, '改高峰窗口必须作废')
 })
 
 await test('文件里的汇率非法时整份文件被拒，内置层照常生效', async () => {
@@ -755,6 +807,59 @@ await test('缺失的用户文件回落到内置层', async () => {
   assert.equal(snapshot.file.exists, false)
   assert.equal(snapshot.file.error, null)
   assert.equal(snapshot.entries.length, 2)
+})
+
+await test('保存请求不带 exchangeRates 时保留文件里现有的汇率（只有显式 {} 才清空）', async () => {
+  // 保存是整份覆盖写，旧版客户端（以及任何忘记带这个键的调用方）会把汇率当删除。
+  // 端点必须有兜底：`undefined` = 没提这件事 → 保留；`null`/`{}` = 明确清空。
+  const { mkdtemp, readFile, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  const entry = {
+    id: 'mine',
+    provider: 'my-gateway',
+    model: 'deepseek-flash',
+    currency: 'CNY',
+    prices: { peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 } },
+  }
+  await writeFile(file, JSON.stringify({ version: 1, exchangeRates: { USD: 7.2, EUR: 7.8 }, entries: [entry] }), 'utf8')
+  const { context, captured } = fakeContext()
+  apply(context, { pricingFile: file })
+  const route = captured.routes.find(row => row.path === '/api/token-fee/pricing')
+
+  const post = async (payload) => {
+    const request = {
+      method: 'POST',
+      headers: { host: '127.0.0.1:3080', 'x-dsh-token-fee-action': 'save', 'content-type': 'application/json' },
+      socket: { remoteAddress: '127.0.0.1' },
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from(JSON.stringify(payload))
+      },
+    }
+    const response = {
+      status: 0,
+      payload: null,
+      writeHead(status) {
+        this.status = status
+      },
+      end(text) {
+        this.payload = JSON.parse(text)
+      },
+    }
+    await route.handler(request, response)
+    return response
+  }
+
+  const omitted = await post({ entries: [entry] })
+  assert.equal(omitted.status, 200)
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).exchangeRates, { USD: 7.2, EUR: 7.8 }, '不带这个键时必须原样保留')
+  assert.deepEqual(omitted.payload.exchangeRates, { USD: 7.2, EUR: 7.8 }, '响应快照里也应还在')
+
+  const cleared = await post({ entries: [entry], exchangeRates: {} })
+  assert.equal(cleared.status, 200)
+  assert.equal(JSON.parse(await readFile(file, 'utf8')).exchangeRates, undefined, '显式空表才清空')
 })
 
 await test('保存端点落盘时保留条目对命名调度的字符串引用', async () => {

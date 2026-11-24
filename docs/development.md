@@ -9,23 +9,31 @@
 ## 命令
 
 ```bash
-npm run check         # 语法检查
-npm test              # 三个离线套件
-npm run test:process  # 进程级回归：用 --patch overlay 装进真实 dsh web 并探测端点
-npm run verify        # 上面三个依次跑（CI 用的就是它）
-npm run pack:check    # npm pack --dry-run，核对发布载荷
+npm run check          # 语法检查
+npm test               # 离线套件（纯函数 / host / 浏览器半静态渲染 / 安装器 / 组件级 / 闸门语义）
+npm run test:process   # 进程级回归：用 --patch overlay 装进真实 dsh web 并探测端点
+npm run verify         # 语法检查 + 离线套件 + 进程级回归（CI 用的就是它）
+npm run verify:process # 同上但进程级为严格模式：跳过即失败（CI 的 process job 用它）
+npm run pack:check     # npm pack --dry-run，核对发布载荷
 ```
 
-`npm test` 不需要 dsh，也不需要网络。`test-process.mjs` 需要 `dsh` 在 PATH 上，否则整体跳过（退出码 0），因此可以安全地在无 dsh 的环境里运行。
+`npm test` 不需要 dsh，也不需要网络。`test-process.mjs` 需要 `dsh` 在 PATH 上：
+
+- 正常运行时退出码 `0`；环境不满足（没有 dsh、无法分配端口、插件未装进 profile）时退出码 **`77`**（autotools 的「skipped」约定），与失败区分开；
+- `--strict`（或 `TOKEN_FEE_REQUIRE_PROCESS=1`）把跳过变成失败（退出码 `1`）——CI 的 `process` job 就是这么用的；
+- `npm run verify` 由 `scripts/verify.mjs` 编排，显式把 `77` 当「跳过」放行并在末尾提示，因此**无 dsh 的环境里 `verify` 仍然是绿的**；真正的失败（其它非零码）照常变红。
 
 ## 测试套件
 
 | 套件 | 覆盖 |
 | --- | --- |
-| `scripts/test-pricing.mjs` | 价目表校验、匹配优先级、峰谷判定、时段切换倒计时、费用换算 |
-| `scripts/test-host.mjs` | `apply` 的注册行为、投影折叠（含替换与重试）、价目表文件读写、端点鉴权与 Promise 归属 |
-| `scripts/test-client.mjs` | 模块工厂装配、`apply` 的 slot 注册、真实 React 渲染（含胶囊上的计费模式），以及 host / 浏览器两侧费用与时段判定的一致性 |
-| `scripts/test-process.mjs` | 经 `--patch` overlay 装进真实 `dsh web`：端点契约、异常路径，以及**端点出错后进程仍然存活** |
+| `scripts/test-pricing.mjs` | 价目表校验（含同层重复身份）、匹配优先级、峰谷判定、时段切换倒计时（含 DST 与成本上界）、费用换算、随包节假日数据 |
+| `scripts/test-host.mjs` | `apply` 的注册行为、投影折叠（含替换与重试）、价目表文件读写、保存端点的汇率兜底、指纹只跟折叠语义走、端点鉴权与 Promise 归属、子代理子树递归 |
+| `scripts/test-client.mjs` | 模块工厂装配、`apply` 的 slot 注册、真实 React 渲染（含胶囊上的计费模式）、两侧费用/时段/倒计时一致性与成本上界、子代理卡片的四态呈现 |
+| `scripts/test-editor.mjs` | 组件级：直接驱动 `PricingEditor` 的保存按钮，断言真实 `POST` 请求体（汇率接线、文件无效时不发请求）——静态 HTML 断言咬不住这条路径 |
+| `scripts/test-install.mjs` | 安装器端到端：复制清单与 `files` 对齐、安装后**真的 import** host 半、`--check` 能发现缺文件、幂等（含手写单引号 patch） |
+| `scripts/test-verify.mjs` | 闸门语义：`verify` 对进程级退出码 0/77/其它的判定 |
+| `scripts/test-process.mjs` | 经 `--patch` overlay 装进真实 `dsh web`：端点契约、异常路径，以及**端点出错后进程仍然存活**（跳过 = 77，严格模式 = 失败） |
 
 `test-client.mjs` 会从 `<DSH_HOME>/profiles/node_modules` 解析真实 React；找不到时退回替身并跳过渲染用例。
 
@@ -64,23 +72,31 @@ This repository has no build step: `lib/*.js` is the shipped artifact, and the b
 ## Commands
 
 ```bash
-npm run check         # syntax check
-npm test              # the three offline suites
-npm run test:process  # process-level regression: install into a real dsh web via a --patch overlay and probe the endpoints
-npm run verify        # the three above, in order (what CI runs)
-npm run pack:check    # npm pack --dry-run, to check the published payload
+npm run check          # syntax check
+npm test               # offline suites (pricing / host / browser-half render / installer / component-level / gate semantics)
+npm run test:process   # process-level regression: install into a real dsh web via a --patch overlay and probe the endpoints
+npm run verify         # syntax check + offline suites + process-level regression (what CI runs)
+npm run verify:process # same, but process-level in strict mode: a skip counts as failure (CI's process job uses this)
+npm run pack:check     # npm pack --dry-run, to check the published payload
 ```
 
-`npm test` needs neither dsh nor the network. `test-process.mjs` needs `dsh` on PATH and otherwise skips as a whole (exit code 0), so it is safe to run where dsh is absent.
+`npm test` needs neither dsh nor the network. `test-process.mjs` needs `dsh` on PATH:
+
+- exit code `0` when it really ran; exit code **`77`** (the autotools "skipped" convention) when the environment cannot support it (no dsh, no free port, plugin not installed in the profile), which keeps "skipped" distinct from "failed";
+- `--strict` (or `TOKEN_FEE_REQUIRE_PROCESS=1`) turns a skip into a failure (exit code `1`) — that is what CI's `process` job uses;
+- `npm run verify` is orchestrated by `scripts/verify.mjs`, which explicitly treats `77` as "skipped" and reports it at the end, so **`verify` stays green where dsh is absent**; real failures still turn it red.
 
 ## Test suites
 
 | Suite | Coverage |
 | --- | --- |
-| `scripts/test-pricing.mjs` | Pricing validation, matching precedence, the tariff decision, the switch countdown, cost conversion |
-| `scripts/test-host.mjs` | `apply` registration, projection folding (including replacement and retry), pricing-file reads and writes, endpoint authorization and promise ownership |
-| `scripts/test-client.mjs` | Module-factory assembly, `apply` slot registration, real React rendering (including the billing mode on the pill), and host/browser agreement on cost and period decisions |
-| `scripts/test-process.mjs` | Installed into a real `dsh web` via a `--patch` overlay: endpoint contract, failure paths, and **the process staying alive after an endpoint error** |
+| `scripts/test-pricing.mjs` | Pricing validation (including duplicate identities in one layer), matching precedence, the tariff decision, the switch countdown (DST and a cost bound), cost conversion, the shipped holiday data |
+| `scripts/test-host.mjs` | `apply` registration, projection folding (including replacement and retry), pricing-file reads and writes, the save endpoint's exchange-rate fallback, the fold-semantics-only fingerprint, endpoint authorization and promise ownership, recursive subagent subtrees |
+| `scripts/test-client.mjs` | Module-factory assembly, `apply` slot registration, real React rendering (including the billing mode on the pill), host/browser agreement on cost, period and countdown plus a cost bound, the four subagent-card states |
+| `scripts/test-editor.mjs` | Component level: drives `PricingEditor`'s save button directly and asserts the real `POST` body (exchange-rate wiring, no request while the file is invalid) — static HTML assertions cannot reach this path |
+| `scripts/test-install.mjs` | Installer end to end: copy list aligned with `files`, **really imports** the installed host half, `--check` catches missing files, idempotency (including a hand-written single-quoted patch) |
+| `scripts/test-verify.mjs` | Gate semantics: how `verify` classifies process-suite exit codes 0/77/other |
+| `scripts/test-process.mjs` | Installed into a real `dsh web` via a `--patch` overlay: endpoint contract, failure paths, and **the process staying alive after an endpoint error** (skip = 77, strict mode = failure) |
 
 `test-client.mjs` resolves real React from `<DSH_HOME>/profiles/node_modules`; when it is missing, the suite falls back to a stub and skips the rendering cases.
 

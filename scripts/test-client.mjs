@@ -1244,6 +1244,48 @@ test('时区使用带 UTC 偏移的下拉框', () => {
   }
 })
 
+test('倒计时的重算成本有上界（不随例外数据量爆炸）', () => {
+  // 随包节假日数据跨 2026–2027（62 个日期）。旧实现按「例外跨度 + 8 天」把扫描上限顶到
+  // 400 天，先把所有候选枚举完再排序：一次 12036 次 Intl.formatToParts、约 55 ms，
+  // 而胶囊每秒调用一次——这就是「面板开着时每秒卡一下」的来源。
+  const raw = JSON.parse(readFileSync(new URL('../data/cn-holidays.json', import.meta.url), 'utf8')).sets.cn
+  const entry = {
+    id: 'cost', provider: 'deepseek-official', model: 'deepseek-flash', currency: 'CNY',
+    schedule: {
+      timezone: 'Asia/Shanghai',
+      peakDays: [1, 2, 3, 4, 5],
+      peakWindows: [['09:00', '12:00'], ['14:00', '18:00']],
+      holidays: raw.holidays,
+      workdays: raw.workdays,
+    },
+    prices: {
+      peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 },
+      offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 1 },
+    },
+  }
+  const original = Intl.DateTimeFormat.prototype.formatToParts
+  let calls = 0
+  Intl.DateTimeFormat.prototype.formatToParts = function countingFormatToParts(...args) {
+    calls += 1
+    return original.apply(this, args)
+  }
+  try {
+    // 冷调用：真实数据下应远低于把 400 天全枚举一遍的量级。
+    calls = 0
+    const cold = clientExports.tariffStateAt(entry, Date.parse('2026-11-24T07:00:00Z'))
+    const coldCalls = calls
+    assert.equal(cold.split, true)
+    assert.ok(cold.remainingMs > 0, '高峰窗口内应给出剩余时间')
+    assert.ok(coldCalls < 200, `冷调用应低于 200 次 Intl，实际 ${coldCalls}`)
+    // 热调用：没跨过切换点时应命中缓存，只剩 tariffAt 的 1 次。
+    calls = 0
+    clientExports.tariffStateAt(entry, Date.parse('2026-11-24T07:00:00Z') + 60_000)
+    assert.ok(calls <= 2, `同一窗口内的重算应命中缓存（≤2 次 Intl），实际 ${calls}`)
+  } finally {
+    Intl.DateTimeFormat.prototype.formatToParts = original
+  }
+})
+
 test('两半的时段与下一次切换在 DST 边界上逐点一致', async () => {
   // 同构是这份代码唯一的正确性来源：两半各有一份 `nextTariffBoundary`，任何一侧改错
   // 都会让胶囊指向一个不会发生切换的时刻。这里直接拿 host 半当 oracle 逐点对照，

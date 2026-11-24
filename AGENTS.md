@@ -30,8 +30,10 @@ lives in `README.md` and `docs/`; this file only records what is easy to break.
 
 ## Releasing
 
-1. `npm run verify`: all four suites must be green (pricing, host, client, process-level).
-   Never ship with a single red.
+1. `npm run verify`: every suite must be green (pricing, host, client, installer, editor, gate
+   semantics, process-level). The process suite may be skipped where `dsh` is absent (exit 77)
+   and `verify` reports it; for a real release run `npm run verify:process`, which turns a skip
+   into a failure.
 2. Bump `version` in `package.json` and write `docs/release-notes/vX.Y.Z.md` (one file, both
    languages; the GitHub Release body is that file — skipping it leaves wrong numbers in
    public artifacts).

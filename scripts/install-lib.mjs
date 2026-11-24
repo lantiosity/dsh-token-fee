@@ -60,10 +60,18 @@ export function installTarget(dshHome, packageName) {
   return join(dshHome, 'profiles', 'node_modules', ...packagePath)
 }
 
-/** 幂等追加插件 patch 记录时用的那一行匹配式。 */
+/**
+ * 幂等追加插件 patch 记录时用的那一行匹配式。
+ *
+ * 双引号是 `JSON.stringify` 的产物，但用户手写的 patch 常用单引号；两种都认，
+ * 否则会追加出第二条同 `id` 的 insert，装载期就出现重复 id / 重复路由。
+ * @param packageName - 包名。
+ * @returns 匹配 `name: "<pkg>"` 或 `name: '<pkg>'` 的正则。
+ */
 export function nameLineOf(packageName) {
   const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`^\\s+name:\\s*${escapeRegExp(JSON.stringify(packageName))}\\s*$`, 'm')
+  const bare = escapeRegExp(packageName)
+  return new RegExp(`^\\s+name:\\s*(?:"${bare}"|'${bare}'|${bare})\\s*$`, 'm')
 }
 
 /** 去掉只含空根序列 `[]` 的文档，避免与后续列表项冲突。 */

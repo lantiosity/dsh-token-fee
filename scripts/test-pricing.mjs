@@ -151,6 +151,24 @@ test('id 重复的价目表被拒绝', () => {
   assert.throws(() => validatePricing([entry(), entry()]), /重复/)
 })
 
+test('同层内 (provider, model, currency) 重复被拒绝', () => {
+  // 两条 id 不同、身份相同的条目会在合并时静默让后一条覆盖前一条，而编辑器两条都显示：
+  // 用户改的价可能根本没生效。同层内必须 fail-loud；跨层覆盖是设计如此。
+  assert.throws(
+    () => validatePricing([entry({ id: 'a' }), entry({ id: 'b' })]),
+    /\(provider, model, currency\) 相同/,
+  )
+  // 币种不同 = 不同身份（多币种并列是支持的）。
+  assert.doesNotThrow(() => validatePricing([entry({ id: 'a' }), entry({ id: 'b', currency: 'USD' })]))
+  // 跨层同身份覆盖仍然允许（用户层覆盖内置层）。
+  const lower = validatePricing([entry({ id: 'builtin' })])
+  const upper = [entry({ id: 'mine', prices: { peak: { input: 9, cacheRead: 0, cacheWrite: 0, output: 18 } } })]
+  const merged = mergePricingLayers([lower, upper])
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].id, 'mine')
+  assert.equal(merged[0].prices.peak.input, 9)
+})
+
 test('非法时区被拒绝', () => {
   assert.throws(() => validateSchedules({ bad: { timezone: 'Mars/Olympus', peakDays: [1], peakWindows: [['09:00', '10:00']] } }), /时区/)
 })
@@ -586,6 +604,33 @@ test('2027 年的节假日数据真的参与时段判定', () => {
   assert.equal(tariffAt(item, monday('2027-10-04')), 'offPeak')
   // 调休上班日（2027-09-26 周日）不在内置规则的峰谷口径里：官方只排除节假日。
   assert.equal(tariffAt(item, monday('2027-09-26')), 'offPeak', '周日不是内置规则的高峰日')
+})
+
+test('倒计时重算成本有上界（host 半与浏览器半同构）', () => {
+  // 随包数据跨 2026–2027 时，旧实现一次 12036 次 Intl.formatToParts（~55 ms）。
+  const item = normalizeEntry(entry({
+    schedule: 'deepseek',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  const original = Intl.DateTimeFormat.prototype.formatToParts
+  let calls = 0
+  Intl.DateTimeFormat.prototype.formatToParts = function countingFormatToParts(...args) {
+    calls += 1
+    return original.apply(this, args)
+  }
+  try {
+    calls = 0
+    const cold = tariffStateAt(item, Date.parse('2026-11-24T07:00:00Z'))
+    const coldCalls = calls
+    assert.equal(cold.split, true)
+    assert.ok(cold.remainingMs > 0)
+    assert.ok(coldCalls < 200, `冷调用应低于 200 次 Intl，实际 ${coldCalls}`)
+    calls = 0
+    tariffStateAt(item, Date.parse('2026-11-24T07:00:00Z') + 60_000)
+    assert.ok(calls <= 2, `同一窗口内的重算应命中缓存，实际 ${calls} 次 Intl`)
+  } finally {
+    Intl.DateTimeFormat.prototype.formatToParts = original
+  }
 })
 
 test('节假日数据自身一致：有序、不重复、假期与调休不相交', () => {
