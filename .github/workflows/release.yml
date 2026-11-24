@@ -59,6 +59,9 @@ jobs:
           else
             echo "未配置 NPM_TOKEN：走 npm Trusted Publishing（OIDC，dry-run）"
           fi
+          # 当前版本通常已经发布过，npm 连 dry-run 都会拒绝「重复版本」。冒烟用一个
+          # 一次性的预发布版本号，只验证打包与发布参数，不碰仓库里的真实版本。
+          npm version "0.0.0-smoke.$(date +%s)" --no-git-tag-version --allow-same-version
           npm publish --provenance --access public --dry-run
 
       - name: 发布到 npm（provenance）
