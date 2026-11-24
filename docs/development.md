@@ -35,7 +35,7 @@ npm run pack:check     # npm pack --dry-run，核对发布载荷
 | `scripts/test-verify.mjs` | 闸门语义：`verify` 对进程级退出码 0/77/其它的判定 |
 | `scripts/test-process.mjs` | 经 `--patch` overlay 装进真实 `dsh web`：端点契约、异常路径，以及**端点出错后进程仍然存活**（跳过 = 77，严格模式 = 失败） |
 
-`test-client.mjs` 会从 `<DSH_HOME>/profiles/node_modules` 解析真实 React；找不到时退回替身并跳过渲染用例。
+`test-client.mjs` 会从 `<DSH_HOME>/profiles/node_modules` 解析真实 React；解析不到时**直接报错**（不会静默跳过——CI 有 devDependencies，正常情况下总能解析到）。
 
 `test-client.mjs` 里有三类「冻结约定」的断言，它们守的是本仓库最容易悄悄退化的地方：
 
@@ -98,7 +98,7 @@ npm run pack:check     # npm pack --dry-run, to check the published payload
 | `scripts/test-verify.mjs` | Gate semantics: how `verify` classifies process-suite exit codes 0/77/other |
 | `scripts/test-process.mjs` | Installed into a real `dsh web` via a `--patch` overlay: endpoint contract, failure paths, and **the process staying alive after an endpoint error** (skip = 77, strict mode = failure) |
 
-`test-client.mjs` resolves real React from `<DSH_HOME>/profiles/node_modules`; when it is missing, the suite falls back to a stub and skips the rendering cases.
+`test-client.mjs` resolves real React from `<DSH_HOME>/profiles/node_modules`; when resolution fails it **errors out** rather than silently skipping (CI has devDependencies, so it normally always resolves).
 
 `test-client.mjs` carries three kinds of "frozen convention" assertions, guarding the places this repository most easily degrades:
 

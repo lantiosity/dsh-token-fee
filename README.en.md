@@ -119,7 +119,7 @@ Config is validated **at load time**: unknown keys, a misspelled currency and st
 }
 ```
 
-The file is read by mtime, so **no dsh restart is needed**: opening the pricing page refetches, and the pill picks the new values up on a page refresh. `exchangeRates` in `cordis.yml` still works as the administrator override — the config value wins per currency, and currencies it omits fall back to the file. Saving the price table from the settings page carries the file's rates back, so it never wipes them.
+The file is read by mtime, so **no dsh restart is needed**: the pill refetches when it is reopened (or the page is refreshed), while the pricing page does not refetch just by being opened once ready — use "Discard and reload". The pill picks the new values up on a page refresh. `exchangeRates` in `cordis.yml` still works as the administrator override — the config value wins per currency, and currencies it omits fall back to the file. Saving the price table from the settings page carries the file's rates back, so it never wipes them.
 
 **Multiple currencies**: every pricing entry carries its own `currency`, so one session can mix CNY and USD usage. The pill and the total **always** accumulate per currency side by side (`¥1.23 + US$0.56`) and never drop one; once `exchangeRates` is configured they additionally show one converted total (`≈ ¥5.26`). **If any foreign currency has no rate, no converted total is shown at all** — half a total is more dangerous than none. Details in [`docs/configuration.md`](docs/configuration.md).
 

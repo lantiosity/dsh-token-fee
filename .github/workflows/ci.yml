@@ -9,12 +9,14 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 与 package.json 的 engines 对齐：^22.19 || >=24。
+        # 与 package.json 的 engines 对齐：^22.19 || >=24。加上 Windows：写盘的
+        # `rename` 在 Windows 上不是原子替换，曾因 EPERM 触发过 bug，需要平台覆盖。
         node: ['22.19', '24']
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

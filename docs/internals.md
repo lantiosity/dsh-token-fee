@@ -23,7 +23,7 @@
 时段分桶是**唯一**被烘进这份状态的派生数据，因此插件把有效价目表的内容指纹并进了 `stateVersion`：
 
 ```js
-projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
+projectionVersion() { return FOLD_VERSION * REVISION_SCALE + (this.revision % REVISION_SCALE) }
 ```
 
 `revision` 是**折叠语义相关字段**的内容哈希：条目顺序与条数、`provider` / `model`、有没有 `offPeak`（决定标签是 peak/offPeak 还是 flat），以及解析后的调度（时区、高峰星期、高峰窗口、节假日与调休日期）。`prices`、`currency`、`note`、`source`、`id` **不进**哈希——它们只影响展示时的金额换算，不改变样本归到哪个时段。改规则（窗口、时区、节假日、增删条目、有无空闲价）时 `PricingStore` 通知订阅者，插件撤下旧注册、按新版本重装，检查点的 `ver` 随即不匹配，DSH 从 `seq 0` 重折整段日志——**历史因此跟着新规则走，而不是冻结在当初那次判定上**；改价格或备注则只刷新展示，不作废任何检查点。
@@ -46,6 +46,8 @@ projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
 - **倒计时的小时不进位到天**：跨周末的长间隔按总小时数显示（例如 `63:00:00`），比「2 天 15 小时」更直接地回答「还剩多久」。
 - **金额四舍五入到分**：胶囊显示到分；明细面板给出更精确的数值。
 - **两种「会话口径」是刻意不同的**：胶囊 / 明细里的**本会话**数字按整条日志折（与官方 `tokenUsage` 一致），因此 fork 出来的会话会带着祖先那段的用量——它是这条会话上下文的一部分，也确实会被再次发给模型。**子代理端点**只折 `seq >= inheritedEventCount` 的**后缀**，因为父会话那一段已经由父会话自己的视图计过，重复计入就是四倍放大的那个 bug。两处都有注释与用例，别把它们「统一」掉。
+- **没有 route 的用量不计入**：`request/header` / `request/context` 都给不出 provider·model 时，本插件折不出可计价的行，该样本被跳过；官方 `tokenUsage` 会照常累计总量。因此来源不明的日志（迁移 / 手工拼接）里，插件的 token 合计可能小于官方统计——这是「不知道价就不冒充」的取舍。
+- **端点的信任边界是本机进程**：`kind: 'exact'` 路由先于 `/api` 前缀命中，因此绕过 DSH 的 web 鉴权，只靠「peer 回环 + Host 回环」两重判定；本机任意进程可读价目表、带自定义动作头可写。若前面有把 `Host` 改写成回环的反向代理，远程也能命中——经 Tailscale 等远程地址访问时请直接编辑文件。
 
 <h2 id="english">English</h2>
 
@@ -68,7 +70,7 @@ pricing file ────▶ loopback endpoints ─────────┘
 The period split is the **only** piece of derived data baked into that state, so the plugin folds a content fingerprint of the effective pricing table into `stateVersion`:
 
 ```js
-projectionVersion() { return FOLD_VERSION * REVISION_SCALE + this.revision }
+projectionVersion() { return FOLD_VERSION * REVISION_SCALE + (this.revision % REVISION_SCALE) }
 ```
 
 `revision` is a hash of the fields that affect **fold semantics only**: entry order and count, `provider` / `model`, whether `offPeak` exists (which decides whether the label is peak/offPeak or flat), and the resolved schedule (timezone, peak weekdays, peak windows, holiday and make-up workday dates). `prices`, `currency`, `note`, `source` and `id` are **not** hashed — they only affect the displayed conversion, never which period a sample belongs to. When a rule changes (window, timezone, holidays, entries added/removed, off-peak added/removed), `PricingStore` notifies its subscribers and the plugin tears down the old registration and installs a new one; the checkpoint's `ver` then no longer matches and DSH refolds the whole log from `seq 0`. **History therefore follows the current rule instead of staying frozen at the original verdict.** Editing a price or a note only refreshes the display and invalidates no checkpoints.
@@ -91,3 +93,5 @@ Writes additionally require a custom action header; reads only decide on origin.
 - **The countdown does not carry hours into days**: a long gap across a weekend is shown as total hours (for example `63:00:00`), which answers "how long left" more directly than "2 days 15 hours".
 - **Amounts round to the cent**: the pill shows cents; the breakdown panel gives more precise figures.
 - **The two "session scopes" are deliberately different**: the pill / breakdown figures for **this session** fold the whole log (matching the official `tokenUsage`), so a forked session carries its ancestor's usage — it is part of this session's context and will be sent to the model again. The **subagent endpoint** folds only the `seq >= inheritedEventCount` **suffix**, because the parent's share is already counted by the parent's own view and counting it again is exactly the 4× inflation bug. Both places carry comments and tests; do not "unify" them.
+- **Usage without a route is not counted**: when neither `request/header` nor `request/context` yields a provider·model, the plugin cannot price that sample and skips it, while the official `tokenUsage` still accumulates the raw total. On logs of unknown provenance (migrated or hand-assembled) the plugin total can therefore be lower than the official token count — a deliberate "do not pretend to know the price" trade-off.
+- **The endpoint's trust boundary is local processes**: `kind: 'exact'` routes match before the `/api` prefix, so they bypass DSH's web auth and rely only on the peer-loopback plus Host-loopback checks; any local process can read the pricing table and, with the custom action header, write it. If a reverse proxy rewrites `Host` to loopback, a remote caller can also reach it — over Tailscale or similar, edit the file directly.
