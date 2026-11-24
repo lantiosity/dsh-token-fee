@@ -37,10 +37,15 @@ lives in `README.md` and `docs/`; this file only records what is easy to break.
 2. Bump `version` in `package.json` and write `docs/release-notes/vX.Y.Z.md` (one file, both
    languages; the GitHub Release body is that file — skipping it leaves wrong numbers in
    public artifacts).
-3. `git commit -m "chore(release): vX.Y.Z"` → push main → annotated tag → `gh release create`.
-4. `npm publish --registry https://registry.npmjs.org` **needs a human 2FA step**: an agent
-   run fails with `EOTP`/`E404`, so hand the command to the maintainer and verify
-   `dist-tags`, file count and shasum afterwards.
+3. `git commit -m "chore(release): vX.Y.Z"` → push main → **annotated tag** `git tag -a vX.Y.Z`
+   → `git push origin vX.Y.Z`. The tag is what publishes: `.github/workflows/release.yml`
+   checks the version against the tag, runs `npm run verify`, publishes with
+   `--provenance` via npm **Trusted Publishing (OIDC)**, then creates the GitHub Release from
+   the notes file. **Do not run `npm publish` locally** — it needs a human 2FA step
+   (`EOTP`/`E404`) and would bypass provenance.
+4. Afterwards verify the public artifact: `npm view @lantiosity/dsh-token-fee dist-tags
+   version` and check the GitHub Release exists. `NPM_TOKEN` remains supported as a fallback
+   secret for a publish before the trusted publisher is configured.
 
 ## Invariants
 

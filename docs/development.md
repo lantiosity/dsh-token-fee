@@ -56,6 +56,26 @@ npm run pack:check     # npm pack --dry-run，核对发布载荷
 
 `lib/client.js` 是一个手写的 CommonJS 风格包体，`lib/index.js` 与 `lib/pricing.js` 是普通 ESM。三者都不经过打包器，改完直接生效（浏览器侧刷新页面即可）。
 
+## 发布（GitHub Actions 自动发布到 npm）
+
+打 tag 即发布，`.github/workflows/release.yml` 负责整条链路：
+
+1. 改 `package.json` 的 `version`，写 `docs/release-notes/vX.Y.Z.md`（中英一份）；
+2. `git commit -m "chore(release): vX.Y.Z"` → push `main`；
+3. `git tag -a vX.Y.Z -m "vX.Y.Z"` → `git push origin vX.Y.Z`。
+
+workflow 会：校验 `package.json` 版本与 tag 一致 → 跑 `npm run verify` → 用
+`npm publish --provenance` 发布（**npm Trusted Publishing / OIDC**，仓库里不存任何长期
+npm 凭证）→ 轮询 registry 确认版本已上线 → 用 release notes 文件创建 GitHub Release。
+
+**一次性配置**（只能由仓库所有者在 npm 网站上做）：npmjs.com → 该包 → Settings →
+**Trusted Publisher** → GitHub Actions，填 `lantiosity/dsh-token-fee` 与
+**Workflow filename `release.yml`**（不填 environment）。配好之前可临时在 repo secrets
+里加 `NPM_TOKEN`（granular token，允许 publish 且绕过 2FA）作为回退，workflow 检测到就优先用它。
+
+手动触发这个 workflow 只跑 `npm publish --dry-run`（冒烟验证，不真正发布）；真实发布只由
+tag 推送触发。**不要在本机跑 `npm publish`**：需要人工 2FA，且会绕过 provenance。
+
 ## 文档
 
 | 文件 | 内容 |
@@ -127,3 +147,26 @@ npm run pack:check     # npm pack --dry-run, to check the published payload
 | [`internals.md`](internals.md) | Projection and period attribution, two-side conversion, endpoint defenses |
 | [`dsh-integration.md`](dsh-integration.md) | DSH integration constraints and the cross-version compatibility matrix |
 | [`release-notes/`](release-notes/) | Release notes per version |
+
+## Releasing (GitHub Actions publishes to npm)
+
+A tag is the release: `.github/workflows/release.yml` owns the whole chain.
+
+1. Bump `version` in `package.json` and write `docs/release-notes/vX.Y.Z.md` (one file, both languages);
+2. `git commit -m "chore(release): vX.Y.Z"` → push `main`;
+3. `git tag -a vX.Y.Z -m "vX.Y.Z"` → `git push origin vX.Y.Z`.
+
+The workflow verifies that `package.json` matches the tag, runs `npm run verify`, publishes with
+`npm publish --provenance` through **npm Trusted Publishing (OIDC)** (no long-lived npm credential
+in the repo), polls the registry until the version is live, then creates the GitHub Release from
+the notes file.
+
+**One-time setup** (repository owner only, on the npm website): npmjs.com → this package →
+Settings → **Trusted Publisher** → GitHub Actions, with `lantiosity/dsh-token-fee` and
+**Workflow filename `release.yml`** (leave environment empty). Until that is configured, a
+`NPM_TOKEN` repository secret (granular token allowed to publish, 2FA bypass) works as a
+fallback — the workflow prefers it when present.
+
+Manually dispatching the workflow only runs `npm publish --dry-run` (smoke test); real publishes
+only happen on tag push. **Do not run `npm publish` locally**: it needs human 2FA and bypasses
+provenance.
