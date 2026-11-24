@@ -262,6 +262,11 @@ try {
     if (!Array.isArray(body.holidaySets?.cn?.holidays) || body.holidaySets.cn.holidays.length === 0) {
       throw new Error(`节假日数据未随快照返回：${JSON.stringify(body.holidaySets)}`)
     }
+    // 真实装载路径必须看到 2027 年的数据（数据文件覆盖 2026–2027）：装载期只读一次，
+    // 更新数据后若不重启 host 半，旧进程里仍是上一版——这条断言能看出跑的是哪一版。
+    if (!body.holidaySets.cn.holidays.some(date => String(date).startsWith('2027-'))) {
+      throw new Error('快照里没有 2027 年节假日：host 半未重启或数据文件未更新')
+    }
   })
 
   await test('子代理用量端点在真实装载路径下应答并优雅降级', async () => {

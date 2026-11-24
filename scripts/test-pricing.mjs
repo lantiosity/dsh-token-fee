@@ -528,10 +528,79 @@ test('随包发布的节假日数据形如约定', () => {
   const cn = CN_HOLIDAY_SETS.cn
   assert.ok(cn !== undefined, '应有 cn 集合')
   assert.equal(cn.name, '中国大陆法定节假日')
-  // 2026 年国务院口径：33 天假期、6 天调休上班。
-  assert.equal(cn.holidays.length, 33)
-  assert.equal(cn.workdays.length, 6)
-  for (const date of cn.holidays) assert.match(date, /^2026-\d{2}-\d{2}$/)
+  const byYear = (dates, year) => dates.filter(date => date.startsWith(`${year}-`))
+  // 2026 年（国办发明电〔2025〕7号）：33 天假期、6 天调休上班。
+  assert.equal(byYear(cn.holidays, '2026').length, 33)
+  assert.equal(byYear(cn.workdays, '2026').length, 6)
+  // 2027 年（国办发明电〔2026〕10号）：29 天假期、5 天调休上班。
+  assert.equal(byYear(cn.holidays, '2027').length, 29)
+  assert.equal(byYear(cn.workdays, '2027').length, 5)
+  assert.equal(cn.holidays.length, 62)
+  assert.equal(cn.workdays.length, 11)
+  for (const date of [...cn.holidays, ...cn.workdays]) assert.match(date, /^20(26|27)-\d{2}-\d{2}$/)
+})
+
+test('2027 年放假安排与国务院通知逐条一致', () => {
+  // 通知：元旦 1/1–1/3；春节 2/5（除夕）–2/13（正月初八）9 天，1/31、2/14 上班；
+  // 清明 4/3–4/5；劳动节 5/1–5/5，5/8 上班；端午 6/9；中秋 9/15；
+  // 国庆 10/1–10/7，9/26、10/9 上班。
+  const cn = CN_HOLIDAY_SETS.cn
+  const range = (start, end) => {
+    const dates = []
+    for (let time = Date.parse(`${start}T00:00:00Z`); time <= Date.parse(`${end}T00:00:00Z`); time += 86_400_000) {
+      dates.push(new Date(time).toISOString().slice(0, 10))
+    }
+    return dates
+  }
+  const expected = [
+    ...range('2027-01-01', '2027-01-03'),
+    ...range('2027-02-05', '2027-02-13'),
+    ...range('2027-04-03', '2027-04-05'),
+    ...range('2027-05-01', '2027-05-05'),
+    '2027-06-09',
+    '2027-09-15',
+    ...range('2027-10-01', '2027-10-07'),
+  ]
+  assert.deepEqual(cn.holidays.filter(date => date.startsWith('2027-')), expected)
+  assert.deepEqual(cn.workdays.filter(date => date.startsWith('2027-')), [
+    '2027-01-31',
+    '2027-02-14',
+    '2027-05-08',
+    '2027-09-26',
+    '2027-10-09',
+  ])
+})
+
+test('2027 年的节假日数据真的参与时段判定', () => {
+  // 数据文件里有日期不等于用得上：这里用内置 `deepseek` 规则（引用 `cn` 集合）实测。
+  // 2027-02-08 是周一、落在春节假期内 → 空闲；2027-02-15 是周一、假期已结束 → 高峰。
+  const item = normalizeEntry(entry({
+    schedule: 'deepseek',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', BUILTIN_SCHEDULES, CN_HOLIDAY_SETS)
+  const monday = (date) => Date.parse(`${date}T03:00:00Z`) // 北京时间 11:00，落在上午高峰窗口内
+  assert.equal(tariffAt(item, monday('2027-02-08')), 'offPeak', '春节假期内的周一应算空闲')
+  assert.equal(tariffAt(item, monday('2027-02-15')), 'peak', '假期结束后的周一应算高峰')
+  // 元旦与国庆同样抽查：2027-01-01（周五）放假，2027-10-04（周一）放假。
+  assert.equal(tariffAt(item, monday('2027-01-01')), 'offPeak')
+  assert.equal(tariffAt(item, monday('2027-10-04')), 'offPeak')
+  // 调休上班日（2027-09-26 周日）不在内置规则的峰谷口径里：官方只排除节假日。
+  assert.equal(tariffAt(item, monday('2027-09-26')), 'offPeak', '周日不是内置规则的高峰日')
+})
+
+test('节假日数据自身一致：有序、不重复、假期与调休不相交', () => {
+  const cn = CN_HOLIDAY_SETS.cn
+  for (const [label, dates] of [['holidays', cn.holidays], ['workdays', cn.workdays]]) {
+    const sorted = [...dates].sort()
+    assert.deepEqual(dates, sorted, `${label} 应按日期升序`)
+    assert.equal(new Set(dates).size, dates.length, `${label} 不应有重复日期`)
+    for (const date of dates) {
+      // 必须是真实存在的日期（排除 2 月 30 日这类手滑）。
+      assert.equal(new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10), date, `${label} 含非法日期 ${date}`)
+    }
+  }
+  const overlap = cn.holidays.filter(date => cn.workdays.includes(date))
+  assert.deepEqual(overlap, [], '同一天不能既放假又调休上班')
 })
 
 //#endregion
