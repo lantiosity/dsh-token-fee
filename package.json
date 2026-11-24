@@ -48,13 +48,14 @@
     "docs/",
     "cordis.patch.yml",
     "scripts/install.mjs",
+    "scripts/install-lib.mjs",
     "README.md",
     "README.en.md",
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/test-process.mjs",
-    "test": "node scripts/test-pricing.mjs && node scripts/test-host.mjs && node scripts/test-client.mjs",
+    "check": "node --check lib/pricing.js && node --check lib/index.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/install-lib.mjs && node --check scripts/test-install.mjs && node --check scripts/test-process.mjs",
+    "test": "node scripts/test-pricing.mjs && node scripts/test-host.mjs && node scripts/test-client.mjs && node scripts/test-install.mjs",
     "test:process": "node scripts/test-process.mjs",
     "verify": "npm run check && npm test && npm run test:process",
     "pack:check": "npm pack --dry-run"

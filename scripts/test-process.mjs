@@ -7,8 +7,12 @@
  * **端点异常时进程仍然存活**——P0-1 的原始症状正是一个逃逸的 rejection 会让
  * `dsh web` 直接退出。
  *
- * 需要 `dsh` 在 PATH 上且本机可启动 web profile；任一条不满足时整体跳过（退出码
- * 0），因此可以在没有 dsh 的环境里安全运行。
+ * 需要 `dsh` 在 PATH 上且本机可启动 web profile；任一条不满足时整体跳过。跳过用
+ * **退出码 77**（autotools 的「skipped」约定），与「通过（0）」区分开——旧实现跳过
+ * 也 exit 0，CI 因此看不出这 9 个用例其实一个都没跑。
+ *
+ * 设 `TOKEN_FEE_REQUIRE_PROCESS=1`（CI 用）时跳过变成失败（退出码 1）：环境没装
+ * `dsh` 之类的意外会让流水线直接红，而不是静默绿。
  *
  * 运行：node scripts/test-process.mjs
  */
@@ -18,6 +22,11 @@ import { request as httpRequest, createServer } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+/** 严格模式：跳过即失败。CI 装了 dsh 之后必须一条都不跳。 */
+const REQUIRE_PROCESS = process.env.TOKEN_FEE_REQUIRE_PROCESS === '1'
+/** 跳过时的退出码；严格模式下用 1 让流水线变红。 */
+const SKIP_CODE = REQUIRE_PROCESS ? 1 : 77
 
 /**
  * 取一个当前空闲的端口。
@@ -44,7 +53,7 @@ try {
   PORT = await freePort()
 } catch (error) {
   console.log(`跳过进程级回归：无法分配本地端口（${error?.message ?? error}）。`)
-  process.exit(0)
+  process.exit(SKIP_CODE)
 }
 const BASE = `http://127.0.0.1:${PORT}`
 const PRICING = `${BASE}/api/token-fee/pricing`
@@ -160,7 +169,7 @@ function startChild() {
 const spawned = startChild()
 if (spawned.failed !== undefined || spawned === null) {
   console.log(`跳过进程级回归：无法启动 dsh（${spawned?.failed ?? 'spawn 返回空'}）。`)
-  process.exit(0)
+  process.exit(SKIP_CODE)
 }
 const child = spawned
 
@@ -199,7 +208,7 @@ async function cleanup() {
 if (spawnFailure !== null) {
   await cleanup()
   console.log(`跳过进程级回归：无法启动 dsh（${spawnFailure}）。`)
-  process.exit(0)
+  process.exit(SKIP_CODE)
 }
 
 if (!started) {
@@ -208,7 +217,7 @@ if (!started) {
   const hint = childExited !== null ? `子进程已退出（code ${childExited}）` : '启动超时'
   console.log(`跳过进程级回归：dsh web 未能在 ${PORT} 上应答（${hint}）。`)
   console.log(childOutput.trim().split('\n').slice(-6).join('\n'))
-  process.exit(0)
+  process.exit(SKIP_CODE)
 }
 
 // 插件未装进 web profile 时端点不会注册，请求会落到 connection 的 /api 前缀
@@ -219,7 +228,7 @@ if (probe.status === 401 || probe.status === 404) {
   await cleanup()
   console.log(`跳过进程级回归：web profile 中未安装 @lantiosity/dsh-token-fee（探测返回 ${probe.status}）。`)
   console.log('先运行 dsh plugin --profile web add <本目录>，再执行本用例。')
-  process.exit(0)
+  process.exit(SKIP_CODE)
 }
 
 try {

@@ -80,7 +80,11 @@ background: var(--dsw-alias-bg-layer-3);
 | 客户端 `useProjection('subagentCatalog')` | 直接子会话的 `id` / `label` / `mode` | 返回 `undefined`，按「没有子代理」处理（投影套件对未装载的能力统一返回 `undefined`，不抛） |
 | host `ctx.sessionQuery.observeSession(id, { projectionMode: 'all' })` | 该会话的完整观测：日志、`header`、`inheritedEventCount`，活会话与已结束会话走同一条路 | 该行记 `no-query` |
 
-端点 `GET /api/token-fee/subagents?ids=…` 只回原始用量行，换算仍由浏览器半用与自身用量**完全相同**的那套 `computeView` 做——因此子代理的峰谷判定、多币种、未定价计数与主会话口径一致，不会各算一套（投影子系统也明确「不做客户端折叠」）。目录投影只给**直接**子会话，嵌套子代理由各自的父会话计入，因此合计天然覆盖整棵子树。
+端点 `GET /api/token-fee/subagents?ids=…` 只回原始用量行，换算仍由浏览器半用与自身用量**完全相同**的那套 `computeView` 做——因此子代理的峰谷判定、多币种、未定价计数与主会话口径一致，不会各算一套（投影子系统也明确「不做客户端折叠」）。
+
+**嵌套子代理由端点自己递归**。目录投影只登记**直接**子会话（`subagent/src/catalog.ts`：materialize direct children），所以孙代不会出现在直接子代理的日志或投影里。端点对每个直接子代理再观测一次、读它自己的 `subagentCatalog` 继续往下走（深度上限 4 层，`seen` 集合防环），把整棵子树的用量行并进该直接子代理那一行；客户端在那一行标出「含 N 个嵌套」。每层都只折「自己那段」，因此递归不会带来重复计数。
+
+响应还带 `truncated`（被 `MAX_SUBAGENT_IDS = 64` 截掉的 id 数）与每行的 `descendants`。`rows` 的语义是「空数组 = 确实没产生用量；`null` = 读不到（观测失败）」——两者在面板里分别显示「未产生用量」与「读不到用量」，后者才计入「未计入」数。
 
 **seeded 子会话只折自己那段**。DSH 以「新建会话 id + 把父会话的事件当种子写进子会话日志」的方式启动 fork 与子代理会话。整段折叠会把父会话的用量在每个子会话里各重放一遍：实测一条会话带四个子代理时，四张卡片各自显示同样的 `1068.6M token`，合计被放大到四千多万倍之外（实为 1.37M）。因此端点只用 `seq >= inheritedEventCount` 的**后缀**折叠，但**保留**种子里的非用量事件（`request/header` 决定路由，整段跳掉会让子会话自己的请求折不出任何行）。父会话那一份永远由父会话自己的视图负责——`dsh-usage-stats` 处理同一问题时要额外判断「父会话存活日志是否仍覆盖种子范围」（它的场景是跨会话总账，压缩后子会话可能是唯一副本），本插件不需要这段判断。
 
@@ -176,7 +180,11 @@ A subagent runs in **its own session**, so its usage never enters the parent's e
 | Client `useProjection('subagentCatalog')` | Direct children's `id` / `label` / `mode` | Returns `undefined`, treated as "no subagents" (the projection kit returns `undefined` for every unmounted capability rather than throwing) |
 | Host `ctx.sessionQuery.observeSession(id, { projectionMode: 'all' })` | The complete observation — log, `header`, `inheritedEventCount` — through one path for live and finished sessions alike | Row is marked `no-query` |
 
-The `GET /api/token-fee/subagents?ids=…` endpoint returns raw usage rows only; the conversion still happens in the browser half through the **same** `computeView` used for its own usage — so peak/off-peak decisions, multi-currency handling and unpriced counts match the main session exactly, with no second implementation (the projection subsystem explicitly forbids client-side folding). The catalog lists **direct** children only; nested subagents are counted by their own parent, so the total naturally covers the whole subtree.
+The `GET /api/token-fee/subagents?ids=…` endpoint returns raw usage rows only; the conversion still happens in the browser half through the **same** `computeView` used for its own usage — so peak/off-peak decisions, multi-currency handling and unpriced counts match the main session exactly, with no second implementation (the projection subsystem explicitly forbids client-side folding).
+
+**Nested subagents are collected by the endpoint itself.** The catalog projection registers **direct** children only (`subagent/src/catalog.ts`: it materializes direct children), so grandchildren never show up in a direct child's log or projections. The endpoint observes each direct child again, reads *its* `subagentCatalog` and keeps descending (depth limit 4, `seen` set against cycles), merging the whole subtree's rows into that direct child's row; the client marks that row "incl. N nested". Every level folds only its own suffix, so recursion cannot double-count.
+
+The response also carries `truncated` (how many ids `MAX_SUBAGENT_IDS = 64` dropped) and a per-row `descendants`. Rows are "an empty array = genuinely produced no usage; `null` = unreadable (observation failed)" — the panel renders those as "no usage" and "unreadable" respectively, and only the latter counts as left out.
 
 **A seeded child is folded over its own suffix only.** DSH starts a fork or a subagent session by minting a new session id and writing the parent's events into the child's log as a seed. Folding the whole log replays the parent's usage inside every child: one session with four subagents made each card report the same `1068.6M` tokens, inflating the group roughly three thousandfold (the real figure was 1.37M). The endpoint therefore folds only `seq >= inheritedEventCount`, while **keeping** the seeded non-usage events such as `request/header`, which establish the route — dropping the whole seed leaves the child's own requests without a route and yields no rows at all. The parent's own share is never re-derived here; the parent's view owns it, which is also why `dsh-usage-stats` needs an extra "does the parent's surviving log still cover the seed" test for its cross-session ledger and this plugin does not.
 

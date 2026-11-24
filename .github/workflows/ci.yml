@@ -22,9 +22,39 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      # verify = check + 三个离线套件 + 进程级回归。CI 里没有 dsh，进程级套件会
-      # 自行跳过并以 0 退出，因此无需为此分叉命令。
+      # verify = check + 三个离线套件 + 安装器端到端 + 进程级回归。
+      # 进程级回归在没有 dsh 的环境里退出码为 77（跳过），不会让本 job 变红；
+      # 真跑它的 job 是下面的 process。
       - run: npm run verify
+
+  process:
+    # 进程级套件必须在**真实 dsh** 里跑。没有 dsh 时那 9 个用例整体跳过（退出码 77），
+    # 旧实现甚至连跳过都 exit 0，于是「端点异常时进程仍然存活」这条最重要的回归
+    # 在 CI 里从未被验证过。这里装上 dsh 并用 TOKEN_FEE_REQUIRE_PROCESS=1 把跳过
+    # 变成失败：环境没装好就红，而不是静默绿。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: 安装 dsh 与 pnpm
+        run: |
+          npm i -g @deepseek-ai/dsh@0.2.2-rc.3
+          corepack enable
+          corepack prepare pnpm@10 --activate
+          dsh --version
+      - name: 把本插件装进隔离的 DSH_HOME
+        run: |
+          export DSH_HOME="$RUNNER_TEMP/dsh-home"
+          echo "DSH_HOME=$DSH_HOME" >> "$GITHUB_ENV"
+          dsh plugin --profile web add "$PWD"
+      - name: 进程级回归（跳过即失败）
+        env:
+          TOKEN_FEE_REQUIRE_PROCESS: '1'
+        run: npm run test:process
 
   payload:
     # 发布载荷必须闭合：files 未覆盖到的相对运行时导入会让装好的插件在装载期失败。
@@ -51,6 +81,8 @@ jobs:
             // 装载期同步读取：缺了插件会直接装载失败，因此必须钉在载荷里。
             'data/cn-holidays.json',
             'scripts/install.mjs',
+            // 安装器本体拆成「库 + 薄 CLI」以便进程内测试，两个都要在载荷里。
+            'scripts/install-lib.mjs',
             'README.md',
             'README.en.md',
             'LICENSE',

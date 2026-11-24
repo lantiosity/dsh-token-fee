@@ -248,12 +248,65 @@ await test('子代理端点按会话观测返回用量，并释放观测', async
     { provider: 'p', model: 'm', tariff: 'flat', input: 10, cacheRead: 0, cacheWrite: 0, output: 0 },
   ], '折出的行应原样带回')
   assert.equal(live.source, 'prepared')
-  assert.equal(empty.rows, null)
-  assert.match(empty.reason, /^no-usage/)
-  assert.equal(boom.rows, null)
+  // 空数组 = 这个子代理（及其派生）确实没产生用量，是确凿的 0，不是「读不到」。
+  assert.deepEqual(empty.rows, [], '没有用量的子代理应回空数组')
+  assert.equal(empty.reason, null, '没有用量不是错误，不该给 reason')
+  assert.equal(boom.rows, null, '观测失败才是「读不到」')
   assert.match(boom.reason, /^observe-failed/)
   // 观测对象必须释放，否则会一直持有那个会话。
   assert.deepEqual(disposed.sort(), ['empty', 'live'])
+})
+
+await test('子代理端点递归收集孙代用量，并给出嵌套数量', async () => {
+  // DSH 的 subagentCatalog 只登记**直接**子会话，因此孙代必须由插件自己往下走；
+  // 否则多级委派会静默少算钱，而 README 声称「覆盖整棵子树」。
+  const catalogOf = ids => ({ projections: { values: { subagentCatalog: ids.map(id => ({ id, createdAt: 1, mode: 'one-shot' })) } } })
+  const header = { seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'p', model: 'm' } } } }
+  const message = (tokens) => ({ seq: 1, type: 'assistant/message', time: 2, data: { turn: 1, step: 1, usage: { inputTokens: tokens } } })
+  const available = {
+    sessionQuery: {
+      async observeSession(id) {
+        const own = { source: 'prepared', header: { id, createdAt: 1 }, inheritedEventCount: 0, [Symbol.dispose]() {} }
+        // child → grandchild → great-grandchild（深度 3，撞上 MAX_SUBAGENT_DEPTH 之前）
+        if (id === 'child') return { ...own, events: [header, message(1)], ...catalogOf(['grandchild']) }
+        if (id === 'grandchild') return { ...own, events: [header, message(2)], ...catalogOf(['great']) }
+        if (id === 'great') return { ...own, events: [header, message(4)], ...catalogOf([]) }
+        return { ...own, events: [header], ...catalogOf([]) }
+      },
+    },
+  }
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'], available)
+  apply(context, undefined)
+  const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
+  const response = await getRoute(route, '/api/token-fee/subagents?ids=child')
+  const [child] = response.payload.children
+  assert.equal(child.descendants, 2, '应报出两个后代（孙代 + 曾孙代）')
+  const total = child.rows.reduce((sum, row) => sum + row.input, 0)
+  assert.equal(total, 1 + 2 + 4, `应把整棵子树的用量都算进来，实际 ${total}`)
+})
+
+await test('子代理 id 超过上限时回被截断的数量，而不是静默丢弃', async () => {
+  const available = {
+    sessionQuery: {
+      async observeSession(id) {
+        return {
+          source: 'prepared',
+          header: { id, createdAt: 1 },
+          inheritedEventCount: 0,
+          events: [{ seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'p', model: 'm' } } } }],
+          projections: { values: { subagentCatalog: [] } },
+          [Symbol.dispose]() {},
+        }
+      },
+    },
+  }
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'], available)
+  apply(context, undefined)
+  const route = captured.routes.find(item => item.path === '/api/token-fee/subagents')
+  const ids = Array.from({ length: 70 }, (_, index) => `s${index}`).join(',')
+  const response = await getRoute(route, `/api/token-fee/subagents?ids=${ids}`)
+  assert.equal(response.payload.children.length, 64, '只处理前 64 个')
+  assert.equal(response.payload.truncated, 6, '被截掉的 6 个必须报出来')
 })
 
 await test('缺 sessionQuery 时子代理端点说明原因而不是报错', async () => {
@@ -753,6 +806,55 @@ await test('保存端点落盘时保留条目对命名调度的字符串引用',
   const written = JSON.parse(await readFile(file, 'utf8'))
   assert.equal(written.entries[0].schedule, 'deepseek', '命名引用必须原样落盘')
   assert.equal(response.payload.entries.find(entry => entry.id === 'mine').schedule.timezone, 'Asia/Shanghai')
+})
+
+await test('用户文件无效时拒绝覆盖写入（409），force 才允许', async () => {
+  // 文件读不出来时有效层已回落到内置、编辑器草稿是空的；此时一次保存会把用户手写的
+  // 全部条目覆盖成空表（v0.6.0 实测会丢数据）。host 必须自己挡一道。
+  const { mkdtemp, writeFile, readFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'token-fee-'))
+  const file = join(dir, 'token-fee.json')
+  // 缺 id 的条目：host 判定整份文件无效。
+  const broken = '{"version":1,"entries":[{"provider":"p","model":"m","prices":{"peak":{"input":1}}}]}'
+  await writeFile(file, broken, 'utf8')
+  const { context, captured } = fakeContext(['sessionProjections', 'webServer'])
+  // 让端点用的 store 指向临时文件；apply 内部的 store 才是被测的那个。
+  apply(context, { pricingFile: file })
+  const route = captured.routes.find(item => item.path === '/api/token-fee/pricing')
+  const post = async (body) => {
+    const request = {
+      method: 'POST',
+      headers: { host: '127.0.0.1:3080', 'x-dsh-token-fee-action': 'save', 'content-type': 'application/json' },
+      socket: { remoteAddress: '127.0.0.1' },
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from(JSON.stringify(body))
+      },
+    }
+    const response = {
+      status: 0,
+      payload: null,
+      writeHead(status) {
+        this.status = status
+      },
+      end(text) {
+        this.payload = JSON.parse(text)
+      },
+    }
+    await route.handler(request, response)
+    return response
+  }
+
+  const refused = await post({ entries: [] })
+  assert.equal(refused.status, 409)
+  assert.equal(refused.payload.error, 'file-invalid')
+  assert.match(refused.payload.message, /拒绝覆盖写入/)
+  assert.equal(await readFile(file, 'utf8'), broken, '拒绝时文件必须原样保留')
+
+  const forced = await post({ entries: [], force: true })
+  assert.equal(forced.status, 200, '显式 force 应允许覆盖')
+  assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).entries, [])
 })
 
 await test('尚未被条目引用的调度也会原样落盘', async () => {

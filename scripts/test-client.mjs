@@ -270,7 +270,7 @@ function fakePricing(options = {}) {
         exists: options.fileEntries !== undefined,
         entries: fileEntries,
         schedules: options.fileSchedules ?? null,
-        error: null,
+        error: options.fileError ?? null,
       },
       configEntryCount: 0,
     },
@@ -314,6 +314,11 @@ const t = (key, params) => {
     'bucket.cacheWrite': '缓存写入',
     'bucket.output': '输出',
     'editor.fileHint': '用户价目表：{path}',
+    'editor.fileBroken': '文件无效，已暂停保存',
+    'editor.fileBrokenHint': '价目表文件读不出来，已暂停保存以免覆盖；请先修好文件或放弃修改后重载。',
+    'editor.save': '保存',
+    'editor.discard': '放弃修改并重新载入',
+    'editor.resetDefaults': '恢复内置价目',
     'editor.addEntry': '新增条目',
     'editor.addSchedule': '新增规则',
     'editor.offPeakShort': '空闲 · {bucket}',
@@ -374,6 +379,9 @@ const t = (key, params) => {
     'subagents.toggle': '展开或收起 {label} 的用量明细',
     'subagents.unreadable': '读不到用量',
     'subagents.missing': '{count} 个子代理的用量暂时读不到，未计入合计。',
+    'subagents.truncated': '另有 {count} 个未统计。',
+    'subagents.noUsage': '未产生用量',
+    'subagents.nested': '含 {count} 个嵌套',
     'subagents.error': '子代理用量读取失败：{message}',
     'detail.totalExact': '精确金额 {value} · 共 {tokens} tokens',
     'detail.convertedNote': '外币已按汇率折算：{rates}。折算合计是参考值，不是实际入账金额。',
@@ -1226,10 +1234,93 @@ test('时区使用带 UTC 偏移的下拉框', () => {
   // 规则默认收起，因此直接渲染规则表单，而不是走收敛态的卡片。
   const html = renderScheduleEditor()
   assert.match(html, /<select class="tf_select">/)
-  assert.match(html, /value="Asia\/Shanghai"[^>]*>Asia\/Shanghai \(GMT\+8\)</)
-  assert.match(html, /value="UTC"[^>]*>UTC \(GMT\+0\)</)
-  assert.match(html, /value="America\/New_York"[^>]*>America\/New_York \(GMT-4\)</)
-  assert.match(html, /value="Asia\/Calcutta"[^>]*>Asia\/Calcutta \(GMT\+5:30\)</)
+  // 偏移随夏令时变化：纽约 7 月是 GMT-4、1 月是 GMT-5。断言必须跟着实现算，
+  // 不能写死某个季节的值——写死会让发布闸门每年 11 月至次年 3 月必红
+  // （v0.6.0 就带着一条这样的季节性断言发布出去了）。
+  for (const zone of ['Asia/Shanghai', 'UTC', 'America/New_York', 'Asia/Calcutta']) {
+    const escapedZone = zone.replace(/[/]/g, '\\/')
+    const escapedLabel = clientExports.timezoneLabel(zone).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    assert.match(html, new RegExp(`value="${escapedZone}"[^>]*>${escapedLabel}<`), `${zone} 的选项文本应与当前偏移一致`)
+  }
+})
+
+test('两半的时段与下一次切换在 DST 边界上逐点一致', async () => {
+  // 同构是这份代码唯一的正确性来源：两半各有一份 `nextTariffBoundary`，任何一侧改错
+  // 都会让胶囊指向一个不会发生切换的时刻。这里直接拿 host 半当 oracle 逐点对照，
+  // 重点覆盖纽约/柏林/悉尼的春、秋令时切换日。
+  const hostPricing = await import('../lib/pricing.js')
+  const zones = ['America/New_York', 'Europe/Berlin', 'Australia/Sydney']
+  const windows = [['01:00', '02:00'], ['02:00', '03:00'], ['09:00', '12:00']]
+  const months = [3, 4, 10, 11]
+  let compared = 0
+  for (const zone of zones) {
+    for (const window of windows) {
+      const entry = hostPricing.normalizeEntry({
+        id: 'z',
+        provider: 'p',
+        model: 'm',
+        currency: 'CNY',
+        schedule: { timezone: zone, peakDays: [0, 1, 2, 3, 4, 5, 6], peakWindows: [window] },
+        prices: {
+          peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+          offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 0.5 },
+        },
+      }, 'z')
+      for (const month of months) {
+        const base = Date.UTC(2026, month - 1, 1, 0, 0)
+        for (let step = 0; step < 16; step += 1) {
+          const at = base + step * 6 * 3600_000
+          const host = hostPricing.tariffStateAt(entry, at)
+          const browser = clientExports.tariffStateAt(entry, at)
+          const where = `${zone} ${window.join('-')} @${new Date(at).toISOString()}`
+          assert.equal(browser.tariff, host.tariff, `时段不一致：${where}`)
+          assert.equal(browser.nextTariff, host.nextTariff, `下一次时段不一致：${where}`)
+          assert.equal(browser.remainingMs, host.remainingMs, `剩余时间不一致：${where}`)
+          compared += 1
+        }
+      }
+    }
+  }
+  assert.ok(compared >= 500, `比较次数应足够，实际 ${compared}`)
+})
+
+test('春令时空洞与秋令时重复小时的倒计时', () => {
+  // 纽约 2026-03-08 02:00 EST → 03:00 EDT（02:00 不存在）；2026-11-01 02:00 EDT → 01:00 EST
+  // （01:00–02:00 出现两次）。旧实现按单条偏移反解，两个方向都会错 21–24 小时。
+  const entry = {
+    id: 'z', provider: 'p', model: 'm', currency: 'CNY',
+    schedule: { timezone: 'America/New_York', peakDays: [0, 1, 2, 3, 4, 5, 6], peakWindows: [['01:00', '02:00']] },
+    prices: {
+      peak: { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 },
+      offPeak: { input: 0.5, cacheRead: 0, cacheWrite: 0, output: 0.5 },
+    },
+  }
+  const spring = clientExports.tariffStateAt(entry, Date.parse('2026-03-08T05:30:00Z'))
+  assert.equal(spring.tariff, 'offPeak')
+  assert.equal(spring.remainingMs, 30 * 60_000, `春令时应剩 30 分钟，实际 ${spring.remainingMs / 60000}`)
+  const fall = clientExports.tariffStateAt(entry, Date.parse('2026-11-01T05:30:00Z'))
+  assert.equal(fall.tariff, 'peak')
+  assert.equal(fall.remainingMs, 90 * 60_000, `秋令时应剩 90 分钟，实际 ${fall.remainingMs / 60000}`)
+})
+
+test('UTC 偏移文本与夏令时偏移都可确定地断言', () => {
+  // 纯函数：整点不带分钟，半点/非整点带两位分钟。
+  const f = clientExports.formatUtcOffset
+  assert.equal(f(0), 'GMT+0')
+  assert.equal(f(480), 'GMT+8')
+  assert.equal(f(-300), 'GMT-5')
+  assert.equal(f(330), 'GMT+5:30')
+  assert.equal(f(-210), 'GMT-3:30')
+  assert.equal(f(345), 'GMT+5:45')
+  // 偏移本身按传入时刻算，因此不受运行季节影响。
+  const july = new Date('2026-07-15T00:00:00Z')
+  const january = new Date('2026-01-15T00:00:00Z')
+  assert.equal(clientExports.timezoneOffsetMinutes('America/New_York', july), -240)
+  assert.equal(clientExports.timezoneOffsetMinutes('America/New_York', january), -300)
+  assert.equal(clientExports.timezoneOffsetMinutes('Asia/Shanghai', july), 480)
+  // 不传时刻时仍与标签拼装同源。
+  const zone = 'America/New_York'
+  assert.equal(clientExports.timezoneLabel(zone), zone + ' (' + f(clientExports.timezoneOffsetMinutes(zone)) + ')')
 })
 
 test('时区按 UTC 偏移升序排列而非字母序', () => {
@@ -1354,9 +1445,9 @@ test('保存键位于编辑器顶部而非页面底部', () => {
   assert.ok(saveBar >= 0, '应有保存工具栏')
   assert.ok(entriesSection >= 0, '应有条目编辑区')
   assert.ok(saveBar < entriesSection, '保存工具栏应排在编辑内容之前')
-  assert.match(html, /data-variant="primary"[^>]*>editor\.save</)
+  assert.match(html, /data-variant="primary"[^>]*>保存</)
   // 底部不再重复一个保存键，避免两处入口语义重叠。
-  assert.equal(html.split('editor.save<').length - 1, 1)
+  assert.equal(html.split('>保存<').length - 1, 1)
 })
 
 test('币种与峰谷规则都是下拉框，选项带本地化名称', () => {
@@ -1520,6 +1611,98 @@ test('保存时把文件层的汇率原样带回，没配就不写这个键', ()
   assert.deepEqual(withRates.exchangeRates, { USD: 7.2 })
   assert.equal('exchangeRates' in clientExports.buildSavePayload([draftEntry()], {}, t, {}), false, '没配汇率时不该写出空表')
   assert.equal('exchangeRates' in clientExports.buildSavePayload([draftEntry()], {}, t), false)
+})
+
+test('保存会把文件层汇率一起发进请求体（P0-1 接线）', async () => {
+  // 只断言 buildSavePayload 的返回值是不够的：v0.6.0 就是在这里漏掉的——helper
+  // 返回了 exchangeRates，但 pricing.save() 的请求体只序列化了 { entries, schedules }，
+  // 于是用户点一次保存就把 token-fee.json 里的汇率清空了（静默数据丢失）。
+  // 这条用例走「载荷组装 → API → 请求体」的真实接线。
+  const api = clientExports.createPricingApi()
+  const calls = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (path, init) => {
+    calls.push({ path, init })
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, file: { path: 'x', exists: true, entries: [], rawEntries: [], schedules: null, exchangeRates: {}, error: null } }),
+    }
+  }
+  try {
+    const payload = clientExports.buildSavePayload([draftEntry()], {}, t, { USD: 7.2 })
+    await api.save(payload.entries, payload.schedules, payload.exchangeRates)
+    await api.save([], null, {})
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+  const posts = calls.filter(call => call.init?.method === 'POST')
+  assert.equal(posts.length, 2)
+  const withRates = JSON.parse(posts[0].init.body)
+  assert.deepEqual(withRates.exchangeRates, { USD: 7.2 }, '请求体必须带汇率')
+  assert.equal(Array.isArray(withRates.entries) && withRates.entries.length, 1)
+  // 空表不写这个键（host 的「空表不落盘」语义）。
+  assert.equal('exchangeRates' in JSON.parse(posts[1].init.body), false)
+})
+
+test('host 合法的缺字段文件在编辑器里补齐默认值，不再抛 TypeError', () => {
+  // host 把 provider / currency / 价格桶都当「可选 + 默认值」（*、CNY、0），所以
+  // 下面这份文件是合法的；但草稿直接用原始层字段做 trim，缺字段会 undefined.trim()
+  // 抛错，而旧实现把本地拦截放在 try 之外 → busy 卡死、保存不可用。
+  const { entries } = clientExports.adoptPricing(
+    [{ id: 'minimal-1', model: 'model-a', prices: { peak: { input: 1, output: 2 } } }],
+    {},
+  )
+  assert.equal(entries[0].provider, '*')
+  assert.equal(entries[0].currency, 'CNY')
+  assert.equal(entries[0].schedule, null)
+  assert.deepEqual(entries[0].prices.peak, { input: 1, cacheRead: 0, cacheWrite: 0, output: 2 })
+  // 关键：补齐后本地拦截与载荷组装都不再抛错。
+  assert.deepEqual(clientExports.collectProblems(entries, {}, [], t), [])
+  const payload = clientExports.buildSavePayload(entries, {}, t)
+  assert.equal(payload.entries.length, 1)
+  assert.equal(payload.entries[0].provider, '*')
+  assert.equal(payload.entries[0].currency, 'CNY')
+  // 已经带全字段的条目不被改写。
+  const full = clientExports.adoptPricing([{
+    id: 'full', provider: 'p', model: 'm', currency: 'USD',
+    prices: { peak: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 } },
+  }], {})
+  assert.deepEqual(full.entries[0].prices.peak, { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 })
+  assert.equal(full.entries[0].currency, 'USD')
+})
+
+test('文件无效时禁用保存与恢复内置，避免覆盖用户手写内容', () => {
+  // 文件读不出来时草稿是空的，旧实现两个破坏性按钮仍可点：点一次就把整份文件
+  // 覆盖成空表（或直接删掉）。host 侧还有 409 保护，这里断言界面上就点不到。
+  const broken = render(react.createElement(clientExports.PricingEditor, {
+    pricing: fakePricing({ fileError: '价目表文件无效：token-fee.json entries[0].id 不能为空' }),
+    t,
+    onOverlayToggle: () => {},
+  }))
+  assert.match(broken, /价目表文件无效/, '应把文件错误显示出来')
+  assert.match(broken, /文件无效，已暂停保存/, '保存状态应说明已暂停')
+  // 保存与恢复内置都带 disabled；放弃修改不带（它是非破坏性重读）。
+  const buttons = [...broken.matchAll(/<button type="button"([^>]*)>([^<]*)<\/button>/g)].map(match => ({ attrs: match[1], text: match[2] }))
+  const save = buttons.find(button => button.text === '保存')
+  const restore = buttons.find(button => button.text === '恢复内置价目')
+  const discard = buttons.find(button => button.text === '放弃修改并重新载入')
+  assert.ok(save !== undefined, `应有保存按钮：${buttons.map(b => b.text).join(' | ')}`)
+  assert.match(save.attrs, /disabled/, '文件无效时保存应禁用')
+  assert.match(restore.attrs, /disabled/, '文件无效时恢复内置应禁用')
+  assert.ok(discard !== undefined)
+  assert.doesNotMatch(discard.attrs, /disabled/, '放弃修改应始终可用')
+  // 文件正常时保存可用。
+  const ok = render(react.createElement(clientExports.PricingEditor, {
+    pricing: fakePricing(),
+    t,
+    onOverlayToggle: () => {},
+  }))
+  const okSave = [...ok.matchAll(/<button type="button"([^>]*)>([^<]*)<\/button>/g)]
+    .map(match => ({ attrs: match[1], text: match[2] }))
+    .find(button => button.text === '保存')
+  assert.ok(okSave !== undefined)
+  assert.doesNotMatch(okSave.attrs, /disabled/, '文件正常时保存应可用')
 })
 
 test('没有任何规则时保存传 null 而不是空对象', () => {
@@ -2305,6 +2488,45 @@ test('子代理用量按会话折成卡片，读不到的记一笔', () => {
   // 只有真拿到行的那一个进合计。
   assert.equal(result.rows.length, 1)
   assert.equal(result.total.amount, 2)
+})
+
+test('「未产生用量」与「读不到」是两件事，嵌套与被截断都要说出来', () => {
+  // 端点对「真没产生用量」回空数组、对「观测失败」回 null；旧实现把两者都当
+  // 「读不到」并计入未计入数，等于把确凿的 0 说成了读取失败。
+  const catalog = [
+    { id: 'empty', createdAt: 1, mode: 'one-shot', label: '空跑代理' },
+    { id: 'nested', createdAt: 2, mode: 'continuable', label: '带孙代' },
+    { id: 'broken', createdAt: 3, mode: 'one-shot', label: '读不到' },
+  ]
+  const children = [
+    { id: 'empty', rows: [], source: 'prepared', reason: null, descendants: 0 },
+    { id: 'nested', rows: [{ provider: 'deepseek-official', model: 'deepseek-flash', tariff: 'peak', input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0 }], source: 'prepared', reason: null, descendants: 2 },
+    { id: 'broken', rows: null, source: null, reason: 'observe-failed: boom', descendants: 0 },
+  ]
+  const result = clientExports.subagentViews(children, catalog, [SPLIT_BUILTIN], 'CNY', {}, 3)
+  assert.equal(result.missing, 1, '只有 null 才算未计入')
+  assert.equal(result.truncated, 3)
+  const [empty, nested, broken] = result.cards
+  assert.equal(empty.empty, true)
+  assert.equal(empty.view.tokens, 0, '未产生用量应显示 0')
+  assert.equal(nested.descendants, 2)
+  assert.equal(nested.view.amount, 2)
+  assert.equal(broken.view, null)
+  // 合计只含真正拿到的行。
+  assert.equal(result.total.amount, 2)
+  const html = render(react.createElement(clientExports.FeeDetail, {
+    view: clientExports.computeView({ rows: [] }, [SPLIT_BUILTIN], 'CNY', {}),
+    subagents: { ...result, error: null },
+    exchangeRates: {},
+    t,
+    pricingError: null,
+    onConfigure: () => {},
+  }))
+  assert.match(html, /未产生用量/)
+  assert.match(html, /含 2 个嵌套/)
+  assert.match(html, /读不到用量/)
+  assert.match(html, /1 个子代理的用量暂时读不到/)
+  assert.match(html, /另有 3 个未统计/)
 })
 
 test('明细面板给子代理单独成组，合计含子代理', () => {

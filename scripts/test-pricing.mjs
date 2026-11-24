@@ -621,6 +621,72 @@ test('夏令时切换当天的墙上时间换算正确', () => {
   assert.equal(hours(sunday.remainingMs), 30)
 })
 
+test('春令时空洞里不存在的窗口边界不会把倒计时算错一整天', () => {
+  // 纽约 2026-03-08 02:00 EST 直接跳到 03:00 EDT：02:00 这个墙上时刻当天不存在。
+  // 旧实现按单条偏移反解，会把它算成一个已经过去的时刻，倒计时直接跳到下一天。
+  const schedules = validateSchedules({
+    ny: { timezone: 'America/New_York', peakDays: [0, 1, 2, 3, 4, 5, 6], peakWindows: [['01:00', '02:00']] },
+  })
+  const item = normalizeEntry(entry({
+    schedule: 'ny',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', schedules)
+  // 当天 00:30 EST（05:30Z）→ 01:00 EST（06:00Z）进入高峰，只差 30 分钟。
+  const state = tariffStateAt(item, Date.parse('2026-03-08T05:30:00Z'))
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  assert.equal(state.remainingMs, 30 * 60_000, `应只差 30 分钟，实际 ${state.remainingMs / 60000} 分钟`)
+})
+
+test('秋令时重复小时的倒计时取两个解里最近的那个', () => {
+  // 纽约 2026-11-01 02:00 EDT 回到 01:00 EST：01:00–02:00 这个墙上区间出现两次。
+  // 从第一次 01:30 EDT（05:30Z）起，窗口终点 02:00 只在第二次出现时到达（07:00Z）。
+  const schedules = validateSchedules({
+    ny: { timezone: 'America/New_York', peakDays: [0, 1, 2, 3, 4, 5, 6], peakWindows: [['01:00', '02:00']] },
+  })
+  const item = normalizeEntry(entry({
+    schedule: 'ny',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', schedules)
+  const state = tariffStateAt(item, Date.parse('2026-11-01T05:30:00Z'))
+  assert.equal(state.tariff, 'peak')
+  assert.equal(state.nextTariff, 'offPeak')
+  // 05:30Z 起算：01:59 EDT = 05:59Z 仍在窗口内；06:00Z 又回到 01:00 EST 也在窗口内；
+  // 直到 07:00Z（02:00 EST）才离开。共 90 分钟。
+  assert.equal(state.remainingMs, 90 * 60_000, `应剩 90 分钟，实际 ${state.remainingMs / 60000} 分钟`)
+})
+
+test('例外日期跨度大时仍能找到切换点（不再固定 32 天上限）', () => {
+  // 只在周六 09:00-10:00 计高峰，且连续 5 个周六放假：从第 1 个周六 10:00 起，
+  // 下一次高峰在第 6 个周六 09:00，跨度 5 周 + 23 小时 ≈ 34.96 天 > 32 天。
+  // 旧实现的上限按「有没有例外」二选一（32 天），这里会直接算不出切换、倒计时消失。
+  const saturday = new Date(Date.UTC(2026, 0, 3))
+  while (saturday.getUTCDay() !== 6) saturday.setUTCDate(saturday.getUTCDate() + 1)
+  const holidays = Array.from({ length: 5 }, (_, index) => {
+    const day = new Date(saturday.getTime() + index * 7 * 86_400_000)
+    return day.toISOString().slice(0, 10)
+  })
+  const schedules = validateSchedules({
+    weekly: {
+      timezone: 'UTC',
+      peakDays: [6],
+      peakWindows: [['09:00', '10:00']],
+      holidays,
+    },
+  })
+  const item = normalizeEntry(entry({
+    schedule: 'weekly',
+    prices: { peak: { input: 2, cacheRead: 0, output: 4 }, offPeak: { input: 1, cacheRead: 0, output: 2 } },
+  }), 'e', schedules)
+  // 从第 1 个周六 10:00（高峰刚结束）起算，下一次高峰是第 6 个周六 09:00。
+  const start = saturday.getTime() + 10 * 3600_000
+  const state = tariffStateAt(item, start)
+  assert.equal(state.tariff, 'offPeak')
+  assert.equal(state.nextTariff, 'peak')
+  const expected = saturday.getTime() + 5 * 7 * 86_400_000 + 9 * 3600_000
+  assert.equal(state.remainingMs, expected - start, `应剩 ${(expected - start) / 86_400_000} 天，实际 ${state.remainingMs === null ? 'null' : (state.remainingMs / 86_400_000).toFixed(2) + ' 天'}`)
+})
+
 test('稀疏规则也能找到下一周的开盘时刻', () => {
   // 只在周一 09:00-12:00 计高峰：从周一 12:00 起要等将近 7 天才再次切换。
   const schedules = validateSchedules({
