@@ -215,6 +215,40 @@ await test('子代理端点只算子会话自己那段，不重算父会话的�
   assert.equal(tokens, 2_000_000, `只该算子会话自己的 2M，实际 ${tokens}（种子被重算就是 3M）`)
 })
 
+await test('投影 schema 严格校验恢复出来的状态，并提供无变化短路', async () => {
+  // DSH 用 `stateSchema.parse` 校验**恢复出来的检查点状态**：抛错 → 冷读层整段重折；
+  // 宽松 schema 会把「抛错→全量重算」降级成「不抛→从错误起点继续折」。
+  const { context, captured } = fakeContext()
+  apply(context, undefined)
+  const definition = captured.projections[0]
+  const good = { route: null, rows: {}, last: null }
+  assert.deepEqual(definition.stateSchema.parse(good), good)
+  assert.throws(() => definition.stateSchema.parse({}), /缺少 rows 字段/)
+  assert.throws(() => definition.stateSchema.parse({ route: null, rows: [], last: null }), /rows 必须是对象/)
+  assert.throws(() => definition.stateSchema.parse({ route: 'x', rows: {}, last: null }), /route 必须是 null/)
+  assert.throws(() => definition.stateSchema.parse({ route: null, rows: {}, last: { turn: 1 } }), /last 必须是 null/)
+  // 行内字段类型也要严：tariff 只能是三档之一。
+  assert.throws(() => definition.stateSchema.parse({
+    route: null,
+    rows: { 'a|b|peak': { provider: 'a', model: 'b', tariff: 'PEAK', input: 1, cacheRead: 0, cacheWrite: 0, output: 0 } },
+    last: null,
+  }), /tariff 必须是 peak/)
+
+  // 无变化短路：同一步骤重放同样的用量 → 返回原引用（不发新帧、不写检查点）。
+  const header = { seq: 0, type: 'request/header', time: 1, data: { header: { config: { provider: 'deepseek-official', model: 'deepseek-flash' } } } }
+  const usageEvent = (seq, time) => ({
+    seq,
+    type: 'assistant/message',
+    time,
+    data: { turn: 1, step: 1, usage: { inputTokens: 7 } },
+  })
+  let state = definition.init({}, 0)
+  state = definition.apply(state, header)
+  state = definition.apply(state, usageEvent(1, 1000))
+  const snapshot = definition.apply(state, usageEvent(2, 2000))
+  assert.equal(snapshot, state, '同一步骤的相同用量应短路返回原状态')
+})
+
 await test('子代理端点按会话观测返回用量，并释放观测', async () => {
   // 走 `sessionQuery.observeSession(id)`：它对活会话与已结束会话统一处理，再按
   // `inheritedEventCount` 只折会话自己那段——最初按 `ctx.sessions.get` + 投影缓存
